@@ -60,15 +60,16 @@ enum Hmc58xxType {
 struct Hmc58xx {
   struct i2c_periph *i2c_p;
   struct i2c_transaction i2c_trans;
-  bool_t initialized;                 ///< config done flag
+  bool initialized;                 ///< config done flag
   enum Hmc58xxConfStatus init_status; ///< init status
-  volatile bool_t data_available;     ///< data ready flag
+  volatile bool data_available;     ///< data ready flag
   union {
     struct Int16Vect3 vect;           ///< data vector in mag coordinate system
     int16_t value[3];                 ///< data values accessible by channel index
   } data;
   struct Hmc58xxConfig config;
   enum Hmc58xxType type;
+  uint16_t adc_overflow_cnt;          ///< counts number of ADC measurement under/overflows
 };
 
 
@@ -81,11 +82,13 @@ extern void hmc58xx_read(struct Hmc58xx *hmc);
 extern void hmc58xx_event(struct Hmc58xx *hmc);
 
 /// convenience function: read or start configuration if not already initialized
-static inline void hmc58xx_periodic(struct Hmc58xx *hmc) {
-  if (hmc->initialized)
+static inline void hmc58xx_periodic(struct Hmc58xx *hmc)
+{
+  if (hmc->initialized) {
     hmc58xx_read(hmc);
-  else
+  } else {
     hmc58xx_start_configure(hmc);
+  }
 }
 
 #endif /* HMC58XX_H */

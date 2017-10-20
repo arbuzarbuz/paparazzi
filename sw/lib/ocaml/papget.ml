@@ -23,6 +23,7 @@
  *)
 
 open Printf
+
 module PC = Papget_common
 module PR = Papget_renderer
 module E = Expr_syntax
@@ -64,36 +65,37 @@ object
   method connect = fun cb -> callbacks <- cb :: callbacks
   method config = fun () ->
     let field = sprintf "%s:%s" msg_name field_descr in
-    [ PC.property "field" field ]
+    let ac_id = match sender with None -> [] | Some id -> [PC.property "ac_id" id] in
+    [ PC.property "field" field ] @ ac_id
   method type_ = "message_field"
 
   initializer
-  let module P = Pprz.Messages (struct let name = class_name end) in
+  let module P = PprzLink.Messages (struct let name = class_name end) in
   let process_message = fun _sender values ->
     let (field_name, index) = base_and_index field_descr in
     let value =
-      match Pprz.assoc field_name values with
-          Pprz.Array array -> array.(index)
+      match PprzLink.assoc field_name values with
+          PprzLink.Array array -> array.(index)
         | scalar -> scalar in
 
-    last_value <- Pprz.string_of_value value;
+    last_value <- PprzLink.string_of_value value;
 
     List.iter (fun cb -> cb last_value) callbacks in
   ignore (P.message_bind ?sender msg_name process_message)
 end
 
 
-let hash_vars = fun expr ->
+let hash_vars = fun ?sender expr ->
   let htable = Hashtbl.create 3 in
   let rec loop = function
-  E.Ident i -> prerr_endline i
+      E.Ident i -> prerr_endline i
     | E.Int _ | E.Float _ -> ()
     | E.Call (_id, list) | E.CallOperator (_id, list) -> List.iter loop list
     | E.Index (_id, e) -> loop e
     | E.Deref (_e, _f) as deref -> fprintf stderr "Warning: Deref operator is not allowed in Papgets expressions (%s)" (E.sprint deref)
     | E.Field (i, f) ->
       if not (Hashtbl.mem htable (i,f)) then
-        let msg_obj = new message_field i f in
+        let msg_obj = new message_field ?sender i f in
         Hashtbl.add htable (i, f) msg_obj in
   loop expr;
   htable
@@ -102,15 +104,16 @@ let hash_vars = fun expr ->
 let wrap = fun f ->
   fun x y -> string_of_float (f (float_of_string x) (float_of_string y))
 let eval_bin_op = function
-"*" -> wrap ( *. )
+  | "*" -> wrap ( *. )
   | "+" -> wrap ( +. )
   | "-" -> wrap ( -. )
   | "/" -> wrap ( /. )
+  | "**" -> wrap ( ** )
   | op -> failwith (sprintf "Papget.eval_expr '%s'" op)
 
 let eval_expr = fun (extra_functions:(string * (string list -> string)) list) h e ->
   let rec loop = function
-  E.Ident ident -> failwith (sprintf "Papget.eval_expr '%s'" ident)
+      E.Ident ident -> failwith (sprintf "Papget.eval_expr '%s'" ident)
     | E.Int int -> string_of_int int
     | E.Float float -> string_of_float float
     | E.CallOperator (ident, [e1; e2]) ->
@@ -130,8 +133,8 @@ let eval_expr = fun (extra_functions:(string * (string list -> string)) list) h 
 
 
 
-class expression = fun ?(extra_functions=[]) expr ->
-  let h = hash_vars expr in
+class expression = fun ?(extra_functions=[]) ?sender expr ->
+  let h = hash_vars ?sender expr in
 object
   val mutable callbacks = []
   val mutable last_value = "0."
@@ -141,7 +144,8 @@ object
   method connect = fun cb -> callbacks <- cb :: callbacks
 
   method config = fun () ->
-    [ PC.property "expr" (Expr_syntax.sprint expr)]
+    let ac_id = match sender with None -> [] | Some id -> [PC.property "ac_id" id] in
+    [ PC.property "expr" (Expr_syntax.sprint expr)] @ ac_id
 
   method type_ = "expression"
 
@@ -228,8 +232,16 @@ object (self)
       | `BUTTON_RELEASE ev ->
         if GdkEvent.Button.button ev = 1 then begin
           item#ungrab (GdkEvent.Button.time ev);
+          (* get item and window size *)
+          let bounds = item#get_bounds in
+          let w, h = Gdk.Drawable.get_size item#canvas#misc#window in
           if not motion then begin
             self#edit ()
+          end
+          else if (truncate bounds.(0) > w)  || (truncate bounds.(2)  < 0) || (truncate bounds.(1) > h) || (truncate bounds.(3) < 0) then begin
+            (* delete an item if placed out of the window on the left or top side *)
+            item#destroy ();
+            deleted <- true
           end;
           motion <- false
         end;
@@ -239,6 +251,9 @@ object (self)
   method edit = fun () ->
     let file = Env.paparazzi_src // "sw" // "lib" // "ocaml" // "widgets.glade" in
     let dialog = new Gtk_papget_editor.papget_editor ~file () in
+
+    let ac_id = PC.get_prop "ac_id" config "Any" in
+    dialog#toplevel#set_title ("Papget Editor (A/C: "^ac_id^")");
 
     let tagged_renderers = Lazy.force PR.lazy_tagged_renderers in
     let strings = List.map fst tagged_renderers in
@@ -353,7 +368,7 @@ object (self)
     let (x, y) = item#xy in
     let attrs =
       [ "type", msg_obj#type_;
-        "display", String.lowercase item#renderer#tag;
+        "display", Compat.bytes_lowercase item#renderer#tag;
         "x", sprintf "%.0f" x; "y", sprintf "%.0f" y ] in
     Xml.Element ("papget", attrs, scale_prop::val_props@renderer_props)
 end
@@ -372,7 +387,7 @@ object
     let (x, y) = item#xy in
     let attrs =
       [ "type", type_;
-        "display", String.lowercase item#renderer#tag;
+        "display", Compat.bytes_lowercase item#renderer#tag;
         "x", sprintf "%.0f" x; "y", sprintf "%.0f" y ] in
     Xml.Element ("papget", attrs, properties@props)
 end
@@ -391,16 +406,18 @@ end
 
 
 (****************************************************************************)
-class canvas_video_plugin_item = fun properties (canvas_renderer:PR.t) ->
-object
+class canvas_video_plugin_item = fun properties (canvas_renderer:PR.t) (adj:GData.adjustment) ->
+object (self)
   inherit canvas_item ~config:properties canvas_renderer as item
+  method update_zoom = fun zoom ->
+    item#update zoom
   method config = fun () ->
     let props = renderer#config () in
     let (x, y) = item#xy in
     let attrs =
       [ "type", "video_plugin";
-        "display", String.lowercase item#renderer#tag;
+        "display", Compat.bytes_lowercase item#renderer#tag;
         "x", sprintf "%.0f" x; "y", sprintf "%.0f" y ] in
     Xml.Element ("papget", attrs, properties@props)
+  initializer ignore(adj#connect#value_changed (fun () -> self#update_zoom (string_of_float adj#value)))
 end
-

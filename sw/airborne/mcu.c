@@ -38,17 +38,22 @@
 #include "subsystems/radio_control.h"
 #endif
 #endif
-#if defined USE_UART0 || defined USE_UART1 || defined USE_UART2 || defined USE_UART3 || defined USE_UART4 || defined USE_UART5 || defined USE_UART6
+#if USE_UART0 || USE_UART1 || USE_UART2 || USE_UART3 || USE_UART4 || USE_UART5 || USE_UART6 || USE_UART7 || USE_UART8
+#define USING_UART 1
 #include "mcu_periph/uart.h"
 #endif
-#if defined USE_I2C0  || defined USE_I2C1  || defined USE_I2C2
+#if USE_I2C0 || USE_I2C1 || USE_I2C2 || USE_I2C3
+#define USING_I2C 1
 #include "mcu_periph/i2c.h"
 #endif
-#if defined USE_ADC
+#if USE_ADC
 #include "mcu_periph/adc.h"
 #endif
-#ifdef USE_USB_SERIAL
+#if USE_USB_SERIAL
 #include "mcu_periph/usb_serial.h"
+#endif
+#ifdef USE_UDP
+#include "mcu_periph/udp.h"
 #endif
 #if USE_SPI
 #include "mcu_periph/spi.h"
@@ -58,39 +63,96 @@
 #endif
 #endif /* PERIPHERALS_AUTO_INIT */
 
-void mcu_init(void) {
+void WEAK board_init(void)
+{
+  /* default board init function does nothing... */
+}
+
+void WEAK board_init2(void)
+{
+  /* default board init function does nothing... */
+}
+
+void mcu_init(void)
+{
+  /* If we have a board specific init function, call it.
+   * Otherwise it will simply call the empty weak function.
+   *
+   * For example the ARDrone2 has this implemented to prevent stray data of IMU
+   * from OEM program still running and also accessing AC sensors
+   */
+  board_init();
 
   mcu_arch_init();
+
+  /* First enable the power of the MCU if needed */
+#if defined MCU_PWR
+  gpio_setup_output(MCU_PWR, MCU_PWR_PIN);
+  MCU_PWR_ON(MCU_PWR, MCU_PWR_PIN);
+
+#if defined BTN_ON
+  gpio_setup_input(BTN_ON, BTN_ON_PIN);
+  if(gpio_get(BTN_ON, BTN_ON_PIN))
+  {
+    MCU_PWR_ON(MCU_PWR, MCU_PWR_PIN);
+  }
+  else {
+    // Turn off and stop: wait until all power is off
+    while(true) {
+      MCU_PWR_OFF(MCU_PWR, MCU_PWR_PIN);
+    }
+  }
+#endif //BTN_ON
+
+#endif //MCU_PWR
 
 #ifdef PERIPHERALS_AUTO_INIT
   sys_time_init();
 #ifdef USE_LED
   led_init();
 #endif
+  /* First enable power of RC */
+#if defined RADIO_CONTROL_POWER_PORT
+  gpio_setup_output(RADIO_CONTROL_POWER_PORT, RADIO_CONTROL_POWER_PIN);
+  RADIO_CONTROL_POWER_ON(RADIO_CONTROL_POWER_PORT, RADIO_CONTROL_POWER_PIN);
+#endif
+#ifdef PERIPHERAL3V3_ENABLE_PORT
+  gpio_setup_output(PERIPHERAL3V3_ENABLE_PORT, PERIPHERAL3V3_ENABLE_PIN);
+  PERIPHERAL3V3_ENABLE_ON(PERIPHERAL3V3_ENABLE_PORT, PERIPHERAL3V3_ENABLE_PIN);
+#endif
   /* for now this means using spektrum */
-#if defined RADIO_CONTROL & defined RADIO_CONTROL_SPEKTRUM_PRIMARY_PORT & defined RADIO_CONTROL_BIND_IMPL_FUNC
+#if defined RADIO_CONTROL & defined RADIO_CONTROL_SPEKTRUM_PRIMARY_PORT & defined RADIO_CONTROL_BIND_IMPL_FUNC & defined SPEKTRUM_BIND_PIN_PORT
   RADIO_CONTROL_BIND_IMPL_FUNC();
 #endif
-#ifdef USE_UART0
+#if USE_UART0
   uart0_init();
 #endif
-#ifdef USE_UART1
+#if USE_UART1
   uart1_init();
 #endif
-#ifdef USE_UART2
+#if USE_UART2
   uart2_init();
 #endif
-#ifdef USE_UART3
+#if USE_UART3
   uart3_init();
 #endif
-#ifdef USE_UART4
+#if USE_UART4
   uart4_init();
 #endif
-#ifdef USE_UART5
+#if USE_UART5
   uart5_init();
 #endif
-#ifdef USE_UART6
+#if USE_UART6
   uart6_init();
+#endif
+#if USE_UART7
+  uart7_init();
+#endif
+#if USE_UART8
+  uart8_init();
+#endif
+#if USING_UART
+  uart_arch_init();
 #endif
 #ifdef USE_I2C0
   i2c0_init();
@@ -101,10 +163,13 @@ void mcu_init(void) {
 #ifdef USE_I2C2
   i2c2_init();
 #endif
-#ifdef USE_ADC
+#ifdef USE_I2C3
+  i2c3_init();
+#endif
+#if USE_ADC
   adc_init();
 #endif
-#ifdef USE_USB_SERIAL
+#if USE_USB_SERIAL
   VCOM_init();
 #endif
 
@@ -140,13 +205,36 @@ void mcu_init(void) {
   spi3_slave_init();
 #endif
 #endif // SPI_SLAVE
+
+#if SPI_SLAVE_HS
+  spi_slave_hs_init();
+#endif
 #endif // USE_SPI
 
 #ifdef USE_DAC
   dac_init();
 #endif
+
+#if USE_UDP0 || USE_UDP1 || USE_UDP2
+  udp_arch_init();
+#endif
+
 #else
-INFO("PERIPHERALS_AUTO_INIT not enabled! Peripherals (including sys_time) need explicit initialization.")
+  INFO("PERIPHERALS_AUTO_INIT not enabled! Peripherals (including sys_time) need explicit initialization.")
 #endif /* PERIPHERALS_AUTO_INIT */
 
+  board_init2();
+}
+
+
+
+void mcu_event(void)
+{
+#if USING_I2C
+  i2c_event();
+#endif
+
+#if USE_USB_SERIAL
+  VCOM_event();
+#endif
 }

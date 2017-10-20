@@ -24,6 +24,7 @@
 
 open Latlong
 
+
 let (//) = Filename.concat
 
 type error = string
@@ -56,7 +57,7 @@ let find = fun tile ->
         try
           let f = open_compressed (tile_name ^".hgt") in
           let n = tile_size*tile_size*2 in
-          let buf = String.create n in
+          let buf = Compat.bytes_create n in
           really_input f buf 0 n;
           Hashtbl.add htiles tile buf;
           buf
@@ -78,6 +79,9 @@ let of_wgs84 = fun geo ->
 
 let of_utm = fun utm ->
   of_wgs84 (Latlong.of_utm WGS84 utm)
+
+let available = fun geo ->
+  try ignore(of_wgs84 geo); true with _ -> false
 
 let area_of_tile = fun tile ->
   let area = open_compressed "srtm.data.bz2" in
@@ -144,6 +148,3 @@ let horizon_slope = fun geo r psi alpha d ->
     (*  Printf.printf "debut calcul \n"; *)
     calc_horizon 0.0 0.0 0.0;
   end
-
-
-

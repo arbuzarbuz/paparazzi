@@ -7,9 +7,10 @@ import settingsframe
 import getopt
 import sys
 
-sys.path.append(os.getenv("PAPARAZZI_HOME") + "/sw/lib/python")
+PPRZ_SRC = os.getenv("PAPARAZZI_SRC", os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                                      '../../../..')))
+sys.path.append(PPRZ_SRC + "/sw/lib/python")
 import settings_xml_parse
-DEFAULT_AC_IDS = [ 11 ] # biwhirly
 
 def Usage(scmd):
     lpathitem = scmd.split('/')
@@ -40,11 +41,10 @@ def GetOptions():
 class SettingsApp(wx.App):
     def OnInit(self):
         options = GetOptions()
-        if len(options['ac_id']) > 0:
-            ac_ids = options['ac_id']
-        else:
-            ac_ids = DEFAULT_AC_IDS
-        self.main = settingsframe.create(None, ac_ids)
+        if not options['ac_id']:
+            Usage(sys.argv[0])
+            sys.exit("Error: Please specify at least one aircraft ID.")
+        self.main = settingsframe.create(None, options['ac_id'])
         self.main.Show()
         self.SetTopWindow(self.main)
 

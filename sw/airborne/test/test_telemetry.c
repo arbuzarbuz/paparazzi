@@ -19,38 +19,66 @@
  * Boston, MA 02111-1307, USA.
  */
 
+/**
+ * @file test_telemetry.c
+ *
+ * Periodically sends ALIVE telemetry messages.
+ */
+
+#define DATALINK_C
+
 #include BOARD_CONFIG
 #include "mcu.h"
-#include "mcu_periph/uart.h"
-#include "interrupt_hw.h"
 #include "mcu_periph/sys_time.h"
 #include "subsystems/datalink/downlink.h"
+#include "modules/datalink/pprz_dl.h"
 #include "led.h"
 
-static inline void main_init( void );
-static inline void main_periodic( void );
+static inline void main_init(void);
+static inline void main_periodic(void);
+static inline void main_event(void);
 
-int main(void) {
-
+int main(void)
+{
   main_init();
 
   while (1) {
-    if (sys_time_check_and_ack_timer(0))
+    if (sys_time_check_and_ack_timer(0)) {
       main_periodic();
+    }
+    main_event();
   }
   return 0;
 }
 
-static inline void main_init( void ) {
+static inline void main_init(void)
+{
   mcu_init();
-  sys_time_register_timer((1./PERIODIC_FREQUENCY), NULL);
+  sys_time_register_timer((1. / PERIODIC_FREQUENCY), NULL);
   mcu_int_enable();
+
+  downlink_init();
+  pprz_dl_init();
 }
 
-static inline void main_periodic( void ) {
-  RunOnceEvery(10, {DOWNLINK_SEND_ALIVE(DefaultChannel, DefaultDevice, 16, MD5SUM);});
+static inline void main_periodic(void)
+{
+  RunOnceEvery(50, {
+      DOWNLINK_SEND_ALIVE(DefaultChannel, DefaultDevice, 16, MD5SUM);
+#ifdef UART_TX_LED
+      LED_TOGGLE(UART_TX_LED);
+#endif
+    });
   LED_PERIODIC();
 }
 
+static inline void main_event(void)
+{
+  mcu_event();
+}
 
-
+void dl_parse_msg(struct link_device *dev __attribute__((unused)),
+                  struct transport_tx *trans __attribute__((unused)),
+                  uint8_t *buf __attribute__((unused)))
+{
+}

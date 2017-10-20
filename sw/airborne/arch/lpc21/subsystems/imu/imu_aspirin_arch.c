@@ -30,20 +30,22 @@ void imu_aspirin_arch_init(void)
 /*
  * Gyro data ready
  */
-void exti15_10_irq_handler(void) {
+void exti15_10_irq_handler(void)
+{
 
   /* clear EXTI */
 //  if(EXTI_GetITStatus(EXTI_Line14) != RESET)
 //    EXTI_ClearITPendingBit(EXTI_Line14);
 
-  //imu_aspirin.gyro_eoc = TRUE;
+  //imu_aspirin.gyro_eoc = true;
   //imu_aspirin.status = AspirinStatusReadingGyro;
 }
 
 /*
  * Accel data ready
  */
-void exti2_irq_handler(void) {
+void exti2_irq_handler(void)
+{
 
   /* clear EXTI */
 //  if(EXTI_GetITStatus(EXTI_Line2) != RESET)
@@ -54,7 +56,8 @@ void exti2_irq_handler(void) {
 /*
  * Accel end of DMA transfer
  */
-void dma1_c4_irq_handler(void) {
+void dma1_c4_irq_handler(void)
+{
 
-  //imu_aspirin.accel_available = TRUE;
+  //imu_aspirin.accel_available = true;
 }

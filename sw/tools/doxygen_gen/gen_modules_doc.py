@@ -8,33 +8,49 @@ import os
 import sys
 import glob
 import re
+import copy
+import string
+import inspect
+
 
 def dox_new_page(name, title):
     return "/** @page " + name + " " + title + "\n\n"
 
+
 def dox_section(name, title):
     return "@section " + name + " " + title + "\n"
+
 
 def dox_list_file(f):
     s = "- @ref " + f
     #s = "- " + f
     return s + "\n"
 
+
 def get_module_dir(module):
     return module.get("dir", module.get("name")).strip()
+
+def get_module_dox_name(module_name):
+    return module_name.lower().replace('.', '_')
+
+def get_module_page_name(module_name):
+    return "module__" + get_module_dox_name(module_name)
 
 def modules_category_list(category, modules):
     s = "@subsection modules_category_" + category.lower() + " " + category.title() + " modules\n\n"
     for (fname, m) in sorted(modules.items()):
-        page_name = "module__" + fname[:-4].lower()
-        s += "- " + fname + " @subpage " + page_name + "\n"
+        mname = fname[:-4].lower()
+        page_name = get_module_page_name(mname)
+        (brief, _) = get_module_description(m)
+        s += "- @subpage {} : {}\n".format(page_name, brief)
     return s + "\n\n"
+
 
 def modules_overview_page(modules_dict):
     s = dox_new_page("onboard_modules", "Onboard Modules")
     s += "@tableofcontents\n"
     s += "The modules allow to add new code in a flexible way with initialisation, periodic and event functions without modifying the main AP loop.\n"
-    s += "Also see http://paparazzi.enac.fr/wiki/Modules\n\n"
+    s += "Also see http://wiki.paparazziuav.org/wiki/Modules\n\n"
     s += "@section modules_list List of available modules\n\n"
 
     # dict with dirs and modules under that dir
@@ -63,21 +79,52 @@ def modules_overview_page(modules_dict):
     s += "\n */\n\n"
     return s
 
+
 def module_page(filename, module):
     (brief, details) = get_module_description(module)
-    keyword = filename[:-4].lower()
-    page_name = "module__" + keyword
-    s = dox_new_page(page_name, brief)
-    s += "Module XML file: @c " + filename + "\n\n"
+    mname = filename[:-4].lower()
+    page_name = get_module_page_name(mname)
+    title = mname + " module"
+    s = dox_new_page(page_name, title)
+    s += "<b>" + brief + "</b>\n\n"
     s += details + "\n"
-    s += module_configuration(module)
-    s += module_functions(module)
+    s += get_xml_example(filename, module)
+    s += module_configuration(module, mname)
+    s += module_autoloads(module, mname)
+    s += module_depends_conflicts(module, mname)
+    s += module_functions(module, mname)
+    s += module_datalink(module, mname)
     s += "@section files Files\n\n"
     s += headers_list(module)
     s += sources_list(module)
-    s += "\n@subsection module_xml__{0} Raw {1} file:\n@include {1}\n".format(keyword, filename)
+    s += "\n@subsection module_xml__{0} Raw {1} file:\n@include {1}\n".format(mname, filename)
     s += "\n */\n\n"
     return s
+
+
+def get_xml_example(filename, module):
+    module_name = filename[:-4]
+    opts = module.findall(".doc/define") + module.findall(".doc/configure")
+    s = "\n@section module_load_example__{0} Example for airframe file\n".format(get_module_dox_name(module_name))
+    s += "Add to your firmware section:\n"
+    if opts:
+        s += "This example contains all possible configuration options, not all of them are mandatory!\n"
+    s += "@code{.xml}\n"
+    for d in get_module_dependencies(module):
+        s += '<module name="{0}"/>\n'.format(d)
+    if opts:
+        s += '<module name="{0}">\n'.format(module_name)
+        for o in opts:
+            e = copy.deepcopy(o)
+            if 'description' in e.attrib:
+                del e.attrib['description']
+            s += "  " + string.strip(ET.tostring(e)) + "\n"
+        s += "</module>\n"
+    else:
+        s += '<module name="{0}"/>\n'.format(module_name)
+    s += "@endcode\n"
+    return s
+
 
 def get_doc_config_option(module, type):
     s = ""
@@ -87,7 +134,7 @@ def get_doc_config_option(module, type):
             s += "@subsection {0} {1} Options\n\n".format(type, type.title())
             for c in confs:
                 s += "- @b name: @c {0} @b value: <em>{1}</em>".format(c.get('name'), c.get('value'))
-                desc = c.get('description','')
+                desc = c.get('description', '')
                 if desc:
                     desc = " \\n\n  Description: " + desc
                 s += desc + "\n"
@@ -96,9 +143,10 @@ def get_doc_config_option(module, type):
         print("Error: Could not parse module config.")
     return s
 
+
 def get_doc_sections(module):
     s = ""
-    mname = module.get('name','')
+    mname = module.get('name', '')
     try:
         secs = module.findall("./doc/section")
         if secs:
@@ -106,7 +154,7 @@ def get_doc_sections(module):
             for sec in secs:
                 sname = sec.get('name')
                 s += "- @b section name: @c " + sname
-                p = sec.get('prefix','')
+                p = sec.get('prefix', '')
                 if p:
                     s += " prefix: @c " + p
                 s += "\n"
@@ -114,7 +162,7 @@ def get_doc_sections(module):
                 #print("module {0} has {1} defines in section {2}".format(mname, len(defs), sname))
                 for d in defs:
                     s += "  - @b name @c {0} @b value: <em>{1}</em>".format(d.get('name'), d.get('value'))
-                    desc = d.get('description','')
+                    desc = d.get('description', '')
                     if desc:
                         desc = " \\n\n    Description: " + desc
                     s += desc + "\n"
@@ -123,14 +171,65 @@ def get_doc_sections(module):
         print("Error: Could not parse doc/section of module " + mname)
     return s
 
-def module_configuration(module):
+
+def module_configuration(module, mname):
     doc = get_doc_config_option(module, 'configure')
     doc += get_doc_config_option(module, 'define')
     doc += get_doc_sections(module)
     if doc:
-        return "@section configuration Module configuration options\n\n" + doc
+        return "@section configuration__{0} Module configuration options\n\n".format(get_module_dox_name(mname)) + doc
     else:
         return ""
+
+
+def module_depends_conflicts(module, mname):
+    s = ""
+    deps = get_module_dependencies(module)
+    if deps:
+        s += "@section dependencies__{} Dependencies\n".format(get_module_dox_name(mname))
+        for d in deps:
+            s += "- @ref {}\n".format(get_module_page_name(d))
+    conflicts = get_module_conflicts(module)
+    if conflicts:
+        s += "@section conflicts__{} Conflicts\n".format(get_module_dox_name(mname))
+        for c in conflicts:
+            s += "- @ref {}\n".format(get_module_page_name(c))
+    return s
+
+
+def get_module_dependencies(module):
+    deps = module.find(".depends")
+    deps = deps.text.split(',') if deps is not None else []
+    return [d.strip() for d in deps]
+
+
+def get_module_conflicts(module):
+    conflicts = module.find(".conflicts")
+    conflicts = conflicts.text.split(',') if conflicts is not None else []
+    return [c.strip() for c in conflicts]
+
+
+def module_autoloads(module, mname):
+    s = ""
+    autos = get_module_autoloads(module)
+    if autos:
+        s += "@section autoloads__{} Auto-loaded modules\n".format(get_module_dox_name(mname))
+        s += "The following modules are automatically loaded (just as if you had added them in the airframe file)\n"
+        for a in autos:
+            s += "- @ref {}\n".format(get_module_page_name(a))
+    return s
+
+
+def get_module_autoloads(module):
+    autoloads = module.findall(".autoload")
+    def module_name(m):
+        return (m.get('name') + m.get('type', '')).strip()
+    return [module_name(a) for a in autoloads]
+
+
+def get_module_name(module):
+    return module.get('name')
+
 
 def get_module_description(module):
     desc = module.find("./doc/description")
@@ -139,14 +238,16 @@ def get_module_description(module):
         brief = module.get('name').replace('_', ' ').title()
     else:
         # treat first line until dot as brief
-        d = re.split(r'\.|\n', desc.text.strip(), 1)
+        d = re.split(r'\. |\n', desc.text.strip(), 1)
         brief = d[0].strip()
         if len(d) > 1:
-            details = d[1].strip()+"\n"
-    return (brief, details)
+            details = inspect.cleandoc(d[1]) + "\n"
+    return brief, details
+
 
 def get_headers(module):
     return [f.get('name') for f in module.findall("./header/file")]
+
 
 def headers_list(module):
     headers = get_headers(module)
@@ -159,11 +260,13 @@ def headers_list(module):
     else:
         return ""
 
+
 def get_source_files(module):
     default_dir = os.path.join("modules", get_module_dir(module))
     sources = [os.path.join(f.get("dir", default_dir), f.get("name")) for f in module.findall("./makefile/file")]
     arch_sources = ["arch dependent: " + os.path.join(f.get("dir", default_dir), f.get("name")) for f in module.findall("./makefile/file_arch")]
     return sources + arch_sources
+
 
 def sources_list(module):
     files = get_source_files(module)
@@ -176,6 +279,7 @@ def sources_list(module):
     else:
         return ""
 
+
 def get_init_functions(module):
     s = ""
     inits = [f.get('fun') for f in module.findall("./init")]
@@ -186,6 +290,7 @@ def get_init_functions(module):
             s += "- " + init + "\n"
         s += "\n"
     return s
+
 
 def get_event_functions(module):
     s = ""
@@ -198,6 +303,7 @@ def get_event_functions(module):
         s += "\n"
     return s
 
+
 def get_periodic_functions(module):
     s = ""
     periodics = module.findall("./periodic")
@@ -205,18 +311,18 @@ def get_periodic_functions(module):
         s += "@subsection periodic_functions Periodic Functions\n\n"
         s += "These functions are called periodically at the specified frequency from the module periodic loop.\n\n"
         for p in periodics:
-            s += "- {0}\n".format(p.get('fun',''))
-            if p.get('period',''):
+            s += "- {0}\n".format(p.get('fun', ''))
+            if p.get('period', ''):
                 s += "  - Period in seconds: @a {0}\n".format(p.get('period'))
-            elif p.get('freq',''):
+            elif p.get('freq', ''):
                 s += "  - Frequency in Hz: @a {0}\n".format(p.get('freq'))
             else:
                 s += "  - Running at maximum module frequency.\n"
-            if p.get('delay',''):
+            if p.get('delay', ''):
                 s += "  - Delay: @a {0} \\n\n".format(p.get('delay'))
                 s += "    Integer to impose a sequence (between 0 and main_freq/function_freq)\n"
             # default for autorun is LOCK
-            autorun = p.get('autorun','LOCK')
+            autorun = p.get('autorun', 'LOCK')
             s += "  - Autorun: @a {0} \\n\n".format(autorun)
             if autorun == "TRUE":
                 s += "    Periodic function automatically starts after init.\n"
@@ -224,22 +330,34 @@ def get_periodic_functions(module):
                 s += "    Periodic function is started by user command.\n"
             else:
                 s += "    Periodic function automatically starts after init and can't be stopped.\n"
-            if p.get('start',''):
+            if p.get('start', ''):
                 s += "  - Start function: {0}\\n\n".format(p.get('start'))
                 s += "    Executed before the periodic function starts.\n"
-            if p.get('stop','') and autorun != "LOCK":
+            if p.get('stop', '') and autorun != "LOCK":
                 s += "  - Stop function: {0}\\n\n".format(p.get('stop'))
                 s += "    Executed after the periodic function stops.\n"
     return s
 
-def module_functions(module):
+
+def module_functions(module, mname):
     fdoc = get_init_functions(module)
     fdoc += get_event_functions(module)
     fdoc += get_periodic_functions(module)
     if fdoc:
-        return "@section functions Module functions\n\n" + fdoc + "\n"
+        return "@section functions__{0} Module functions\n\n".format(get_module_dox_name(mname)) + fdoc + "\n"
     else:
         return ""
+
+def module_datalink(module, mname):
+    s = ""
+    datalinks = module.findall("./datalink")
+    if datalinks:
+        s += "@section datalink_functions__{0} Datalink Functions\n\n".format(get_module_dox_name(mname))
+        s += "Whenever the specified datalink message is received, the corresponing handler function is called.\n\n"
+        for d in datalinks:
+            s += "- on message @b {0} call {1}\n".format(d.get('message'), d.get('fun'))
+    return s
+
 
 def read_module_file(file):
     try:
@@ -255,13 +373,14 @@ def read_module_file(file):
     else:
         return root
 
+
 if __name__ == '__main__':
     usage = "Usage: %prog [options] modules/dir" + "\n" + "Run %prog --help to list the options."
     parser = OptionParser(usage)
     parser.add_option("-i", "--inputdir", dest="input_dir",
-                      help="read input from DIR [default: PAPARAZZI_HOME/conf/modules", metavar="DIR")
+                      help="read input from DIR [default: PAPARAZZI_HOME/conf/modules]", metavar="DIR")
     parser.add_option("-o", "--outputdir", dest="output_dir",
-                      help="write output to DIR [default: PAPARAZZI_HOME/doc/manual", metavar="DIR")
+                      help="write output to DIR [default: PAPARAZZI_HOME/doc/manual/generated]", metavar="DIR")
     parser.add_option("-p", "--parents",
                       action="store_true", dest="create_parent_dirs",
                       help="Create parent dirs of output dir if they don't exist.")
@@ -308,7 +427,7 @@ if __name__ == '__main__':
     os.chdir(modules_dir)
     for file in glob.glob("*.xml"):
         module = read_module_file(file)
-        if len(module):
+        if module is not None:
             modules[file] = module
 
     # generate overview
@@ -325,4 +444,3 @@ if __name__ == '__main__':
         outfile.write(outstring)
     if options.verbose:
         print("Done.")
-

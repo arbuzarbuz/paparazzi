@@ -33,10 +33,11 @@ struct VehicleInterface vi;
 #define VI_TIMEOUT 100
 #endif
 
-void vi_init(void) {
+void vi_init(void)
+{
 
-  vi.enabled = FALSE;
-  vi.timeouted = TRUE;
+  vi.enabled = false;
+  vi.timeouted = true;
   vi.last_msg = VI_TIMEOUT;
 
   vi.input.h_mode = GUIDANCE_H_MODE_ATTITUDE;
@@ -47,12 +48,13 @@ void vi_init(void) {
 
 }
 
-void vi_periodic(void) {
+void vi_periodic(void)
+{
 #if (VI_TIMEOUT != 0)
-  if (vi.last_msg < VI_TIMEOUT)
+  if (vi.last_msg < VI_TIMEOUT) {
     vi.last_msg++;
-  else {
-    vi.timeouted = TRUE;
+  } else {
+    vi.timeouted = true;
     vi.input.h_mode = GUIDANCE_H_MODE_ATTITUDE;
     INT_EULERS_ZERO(vi.input.h_sp.attitude);
     vi.input.v_mode = GUIDANCE_V_MODE_CLIMB;
@@ -62,11 +64,13 @@ void vi_periodic(void) {
   vi_impl_periodic();
 }
 
-void vi_set_enabled(bool_t enabled) {
+void vi_set_enabled(bool enabled)
+{
   vi_impl_set_enabled(enabled);
 
 }
 
-void vi_update_info(void) {
+void vi_update_info(void)
+{
 
 }

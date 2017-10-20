@@ -3,13 +3,6 @@
 
 #include "std.h"
 
-#ifdef ENOSE
-#if !defined USE_I2C && !defined SITL
-#define USE_I2C
-#endif
-#endif
-
-
 #define ENOSE_NB_SENSOR 3
 
 extern uint8_t enose_heat[ENOSE_NB_SENSOR];
@@ -24,10 +17,10 @@ extern uint16_t enose_PID_val;
 
 extern uint8_t enose_status;
 
-extern void enose_init( void );
+extern void enose_init(void);
 
 extern void enose_set_heat(uint8_t no_sensor, uint8_t value);
-extern void enose_periodic( void );
+extern void enose_periodic(void);
 
 #define enose_SetHeat0(val) {enose_set_heat(0, val);}
 #define enose_SetHeat1(val) {enose_set_heat(1, val);}

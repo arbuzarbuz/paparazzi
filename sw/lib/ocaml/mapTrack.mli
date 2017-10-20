@@ -24,12 +24,17 @@
 
 class track :
   ?name:string ->
+  ?icon:string ->
   ?size:int ->
   ?color:string ->
+  ?show_carrot:bool ->
+  string ->
   MapCanvas.widget ->
   object
     method add_point : Latlong.geographic -> float -> unit
     method aircraft : GnoCanvas.group
+    method id : string
+    method name : string
     method clear : unit -> unit
     method clear_map2D : unit
     method clear_one : int -> unit
@@ -45,7 +50,7 @@ class track :
     method last_climb : float
     method last_heading : float
     method last_speed : float
-    method move_cam : Latlong.geographic -> Latlong.geographic -> unit
+    method move_cam : Latlong.geographic array -> Latlong.geographic -> unit
     method move_carrot : Latlong.geographic -> unit
     method move_icon :
       Latlong.geographic -> float -> float -> float -> float -> unit
@@ -63,4 +68,7 @@ class track :
     method v_incr : (Latlong.geographic * float) array -> unit
     method v_path : (Latlong.geographic * float) array
     method zoom : float -> unit
+    method event : GnoCanvas.item_event -> bool
+    method set_event_cb : (string -> unit) -> unit
+    method destroy : unit -> unit
   end

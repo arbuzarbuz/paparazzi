@@ -11,10 +11,10 @@
 
 extern uint32_t trigger_t0;
 extern uint32_t delta_t0;
-extern volatile bool_t trig_ext_valid;
+extern volatile bool trig_ext_valid;
 
 void TRIG_ISR(void);
-void trig_ext_init( void );
+void trig_ext_init(void);
 
 #endif /* TRIG_EXT_HW_H */
 

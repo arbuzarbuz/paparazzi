@@ -32,7 +32,7 @@
 #include "subsystems/electrical.h"
 #include "generated/airframe.h"
 #include "inter_mcu.h"
-#include "firmwares/fixedwing/autopilot.h"
+#include "autopilot.h"
 #include "subsystems/navigation/common_nav.h"
 
 #define NB_DATA 24
@@ -47,60 +47,65 @@
 
 struct i2c_transaction com_trans;
 
-bool_t active_com;
+bool active_com;
 
-void generic_com_init( void ) {
-  active_com = FALSE;
+void generic_com_init(void)
+{
+  active_com = false;
   com_trans.status = I2CTransDone;
 }
 
 #define FillBufWith32bit(_buf, _index, _value) {  \
-  _buf[_index] = (uint8_t) (_value);              \
-  _buf[_index+1] = (uint8_t) ((_value) >> 8);     \
-  _buf[_index+2] = (uint8_t) ((_value) >> 16);    \
-  _buf[_index+3] = (uint8_t) ((_value) >> 24);    \
-}
+    _buf[_index] = (uint8_t) (_value);              \
+    _buf[_index+1] = (uint8_t) ((_value) >> 8);     \
+    _buf[_index+2] = (uint8_t) ((_value) >> 16);    \
+    _buf[_index+3] = (uint8_t) ((_value) >> 24);    \
+  }
 
 #define FillBufWith16bit(_buf, _index, _value) {  \
-  _buf[_index] = (uint8_t) (_value);              \
-  _buf[_index+1] = (uint8_t) ((_value) >> 8);     \
-}
+    _buf[_index] = (uint8_t) (_value);              \
+    _buf[_index+1] = (uint8_t) ((_value) >> 8);     \
+  }
 
-void generic_com_periodic( void ) {
+void generic_com_periodic(void)
+{
 
   if (com_trans.status != I2CTransDone) { return; }
 
   com_trans.buf[0] = active_com;
   FillBufWith32bit(com_trans.buf, 1, gps.lla_pos.lat);
   FillBufWith32bit(com_trans.buf, 5, gps.lla_pos.lon);
-  FillBufWith16bit(com_trans.buf, 9, (int16_t)(gps.lla_pos.alt/1000)); // altitude (meters)
+  FillBufWith16bit(com_trans.buf, 9, (int16_t)(gps.lla_pos.alt / 1000)); // altitude (meters)
   FillBufWith16bit(com_trans.buf, 11, gps.gspeed); // ground speed (cm/s)
-  FillBufWith16bit(com_trans.buf, 13, (int16_t)(gps.course/1e4)); // course (1e3rad)
-  FillBufWith16bit(com_trans.buf, 15, (uint16_t)((*stateGetAirspeed_f())*100)); // TAS (cm/s)
+  FillBufWith16bit(com_trans.buf, 13, (int16_t)(gps.course / 1e4)); // course (1e3rad)
+  FillBufWith16bit(com_trans.buf, 15, (uint16_t)(stateGetAirspeed_f() * 100)); // TAS (cm/s)
   com_trans.buf[17] = electrical.vsupply; // decivolts
-  com_trans.buf[18] = (uint8_t)(energy/100); // deciAh
-  com_trans.buf[19] = (uint8_t)(ap_state->commands[COMMAND_THROTTLE]*100/MAX_PPRZ);
-  com_trans.buf[20] = pprz_mode;
+  com_trans.buf[18] = (uint8_t)(energy / 100); // deciAh
+  com_trans.buf[19] = (uint8_t)(imcu_get_command(COMMAND_THROTTLE) * 100 / MAX_PPRZ);
+  com_trans.buf[20] = autopilot_get_mode();
   com_trans.buf[21] = nav_block;
-  FillBufWith16bit(com_trans.buf, 22, autopilot_flight_time);
+  FillBufWith16bit(com_trans.buf, 22, autopilot.flight_time);
   i2c_transmit(&GENERIC_COM_I2C_DEV, &com_trans, GENERIC_COM_SLAVE_ADDR, NB_DATA);
 
 }
 
-void generic_com_event( void ) {
+void generic_com_event(void)
+{
   // Handle I2C event
   if (com_trans.status == I2CTransSuccess || com_trans.status == I2CTransFailed) {
     com_trans.status = I2CTransDone;
   }
 }
 
-void start_com( void ) {
-  active_com = TRUE;
+void start_com(void)
+{
+  active_com = true;
   com_trans.status = I2CTransDone;
 }
 
-void stop_com( void ) {
-  active_com = FALSE;
+void stop_com(void)
+{
+  active_com = false;
   com_trans.buf[0] = active_com;
   i2c_transmit(&GENERIC_COM_I2C_DEV, &com_trans, GENERIC_COM_SLAVE_ADDR, 1);
 }

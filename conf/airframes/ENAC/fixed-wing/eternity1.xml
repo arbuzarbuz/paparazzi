@@ -10,32 +10,26 @@
 
 <airframe name="Eternity 1">
 
-  <modules>
-  </modules>
-
   <firmware name="fixedwing">
     <target name="ap" board="umarim_lite_2.0"/>
     <target name="sim" board="pc"/>
 
     <define name="LOITER_TRIM"/>
-    <define name="ALT_KALMAN"/>
     <define name="AGR_CLIMB"/>
     <define name="USE_I2C0"/>
     <define name="USE_I2C1"/>
 
-    <subsystem name="radio_control" type="ppm"/>
-    <subsystem name="telemetry" type="transparent"/>
-    <subsystem name="imu" type="umarim"/>
-    <subsystem name="ahrs" type="float_dcm">
-      <define name="USE_HIGH_ACCEL_FLAG"/>
-    </subsystem>
-    <subsystem name="ins"     type="alt_float"/>
-    <subsystem name="control"/>
-    <subsystem name="gps" type="ublox"/>
-    <subsystem name="navigation"/>
-    <subsystem name="current_sensor">
+    <module name="radio_control" type="ppm"/>
+    <module name="telemetry" type="transparent"/>
+    <module name="imu" type="umarim"/>
+    <module name="ahrs" type="float_dcm"/>
+    <module name="ins"     type="alt_float"/>
+    <module name="control"/>
+    <module name="gps" type="ublox"/>
+    <module name="navigation"/>
+    <module name="current_sensor">
       <configure name="ADC_CURRENT_SENSOR" value="ADC_0"/>
-    </subsystem>
+    </module>
 
   </firmware>
 
@@ -119,7 +113,6 @@
     <define name="MAXIMUM_AIRSPEED" value="19." unit="m/s"/>
     <define name="CARROT" value="5." unit="s"/>
     <define name="KILL_MODE_DISTANCE" value="(1.5*MAX_DIST_FROM_HOME)"/>
-    <define name="ALT_KALMAN_ENABLED" value="TRUE"/>
     <define name="DEFAULT_CIRCLE_RADIUS" value="80."/>
     <define name="UNLOCKED_HOME_MODE" value="TRUE"/>
   </section>

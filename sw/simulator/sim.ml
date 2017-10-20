@@ -22,11 +22,12 @@
  *
  *)
 
+
 open Printf
 open Stdlib
 open Latlong
 
-module Ground_Pprz = Pprz.Messages(struct let name = "ground" end)
+module Ground_Pprz = PprzLink.Messages(struct let name = "ground" end)
 
 let float_attrib xml a = float_of_string (ExtXml.attrib xml a)
 
@@ -122,7 +123,7 @@ module Make(AircraftItl : AIRCRAFT_ITL) = struct
     ref ground_alt
 
   let main () =
-    let icon = GdkPixbuf.from_file Env.icon_file in
+    let icon = GdkPixbuf.from_file Env.icon_sim_file in
     let window = GWindow.window ~type_hint:`DIALOG ~icon ~title: !ac_name () in
     let quit = fun () -> GMain.Main.quit (); exit 0 in
     ignore (window#connect#destroy ~callback:quit);
@@ -140,7 +141,7 @@ module Make(AircraftItl : AIRCRAFT_ITL) = struct
 
     let _reset = fun () -> state := initial_state in
 
-    let commands = Array.create FM.nb_commands 0 in
+    let commands = Array.make FM.nb_commands 0 in
 
     Aircraft.commands commands;
 
@@ -159,12 +160,12 @@ module Make(AircraftItl : AIRCRAFT_ITL) = struct
     and gps_availability = ref 1 in
 
     let world_update = fun _ vs ->
-      gps_availability := Pprz.int_assoc "gps_availability" vs;
-      wind_x := Pprz.float_assoc "wind_east" vs;
-      wind_y := Pprz.float_assoc "wind_north" vs;
-      wind_z := Pprz.float_assoc "wind_up" vs;
-      infrared_contrast := Pprz.float_assoc "ir_contrast" vs;
-      time_scale#set_value (Pprz.float_assoc "time_scale" vs)
+      gps_availability := PprzLink.int_assoc "gps_availability" vs;
+      wind_x := PprzLink.float_assoc "wind_east" vs;
+      wind_y := PprzLink.float_assoc "wind_north" vs;
+      wind_z := PprzLink.float_assoc "wind_up" vs;
+      infrared_contrast := PprzLink.float_assoc "ir_contrast" vs;
+      time_scale#set_value (PprzLink.float_assoc "time_scale" vs)
     in
 
     let ask_for_world_env = fun () ->
@@ -173,12 +174,14 @@ module Make(AircraftItl : AIRCRAFT_ITL) = struct
 
         let gps_sol = compute_gps_state (x,y,z) (FlightModel.get_time !state) in
 
-        let float = fun f -> Pprz.Float f in
+        let float = fun f -> PprzLink.Float f in
         let values = ["east", float x; "north", float y; "up", float z;
                       "lat", float ((Rad>>Deg)gps_sol.Gps.wgs84.posn_lat);
                       "long", float ((Rad>>Deg)gps_sol.Gps.wgs84.posn_long);
                       "alt", float gps_sol.Gps.alt ] in
-        Ground_Pprz.message_req "sim" "WORLD_ENV" values world_update
+        let (b, flag) = Ground_Pprz.message_req "sim" "WORLD_ENV" values world_update in
+        (* unbind manually after 1s if no message received *)
+        ignore (GMain.Timeout.add 1000 (fun () -> if !flag then Ivy.unbind b; false))
       with
           exc -> fprintf stderr "Error in sim: %s\n%!" (Printexc.to_string exc)
     in
@@ -195,7 +198,7 @@ module Make(AircraftItl : AIRCRAFT_ITL) = struct
               Some s ->
                 begin
                   try s.Gps.alt -. float (Srtm.of_wgs84 s.Gps.wgs84) with
-                      _ -> s.Gps.alt
+                      _ -> s.Gps.alt -. !alt0
                 end
             | None -> 0. in
       FM.state_update !state FM.nominal_airspeed (!wind_x, !wind_y, !wind_z) agl fm_period
@@ -227,7 +230,7 @@ module Make(AircraftItl : AIRCRAFT_ITL) = struct
       Aircraft.attitude_and_rates phi theta psi p q r in
 
     (** Sending to Flight Gear *)
-    let fg_task = fun socket buffer () ->
+    let fg_task = fun socket buffer sockaddr () ->
       match !last_gps_state with
           None -> ()
         | Some s ->
@@ -237,11 +240,11 @@ module Make(AircraftItl : AIRCRAFT_ITL) = struct
       (*    and theta_ = s.Gps.course *)
           and (phi, theta, psi) = FlightModel.get_attitude !state in
           fg_msg buffer lat lon alt phi theta psi;
-      (**       for i = 0 to String.length buffer - 1 do fprintf stderr "%x " (Char.code buffer.[i]) done; fprintf stderr "\n"; **)
+      (**       for i = 0 to Compat.bytes_length buffer - 1 do fprintf stderr "%x " (Char.code buffer.[i]) done; fprintf stderr "\n"; **)
           try
-            ignore (Unix.send socket buffer 0 (String.length buffer) [])
+            ignore (Unix.sendto socket buffer 0 (Compat.bytes_length buffer) [] sockaddr)
           with
-              Unix.Unix_error (e,f,a) -> Printf.fprintf stderr "Error fg: %s (%s(%s))\n" (Unix.error_message e) f a
+              Unix.Unix_error (e,f,a) -> Printf.fprintf stderr "Error sending to FlightGear: %s (%s(%s))\n" (Unix.error_message e) f a; flush stderr
     in
 
     let set_pos = fun _ ->
@@ -271,11 +274,13 @@ module Make(AircraftItl : AIRCRAFT_ITL) = struct
         try
           let inet_addr = Unix.inet_addr_of_string !fg_client in
           let socket = Unix.socket Unix.PF_INET Unix.SOCK_DGRAM 0 in
-          Unix.connect socket (Unix.ADDR_INET (inet_addr, 5501));
-          let buffer = String.create (fg_sizeof ()) in
-          Stdlib.timer ~scale:time_scale fg_period (fg_task socket buffer)
+          (* Unix.connect socket (Unix.ADDR_INET (inet_addr, 5501)); *)
+          let buffer = Compat.bytes_create (fg_sizeof ()) in
+          let sockaddr = (Unix.ADDR_INET (inet_addr, 5501)) in
+          Stdlib.timer ~scale:time_scale fg_period (fg_task socket buffer sockaddr);
+          fprintf stdout "Sending to FlightGear at %s\n" !fg_client; flush stdout
         with
-            e -> fprintf stderr "Error while connecting to fg: %s" (Printexc.to_string e)
+            e -> fprintf stderr "Error setting up FlightGear viz: %s\n" (Printexc.to_string e); flush stderr
     in
 
     let take_off = fun () -> FlightModel.set_air_speed !state FM.nominal_airspeed in

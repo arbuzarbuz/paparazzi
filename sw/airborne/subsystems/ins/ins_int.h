@@ -30,50 +30,48 @@
 #define INS_INT_H
 
 #include "subsystems/ins.h"
+#include "subsystems/gps.h"
 #include "std.h"
 #include "math/pprz_geodetic_int.h"
 #include "math/pprz_algebra_float.h"
 
-// TODO integrate all internal state to the structure
-///** Ins implementation state (fixed point) */
-//struct InsInt {
-//};
-//
-///** global INS state */
-//extern struct InsInt ins_impl;
+/** Ins implementation state (fixed point) */
+struct InsInt {
+  struct LtpDef_i  ltp_def;
+  bool           ltp_initialized;
 
-/* gps transformed to LTP-NED  */
-extern struct LtpDef_i  ins_ltp_def;
-extern          bool_t  ins_ltp_initialised;
-extern struct NedCoor_i ins_gps_pos_cm_ned;
-extern struct NedCoor_i ins_gps_speed_cm_s_ned;
+  uint32_t propagation_cnt; ///< number of propagation steps since the last measurement update
 
-/* barometer                   */
-#if USE_VFF || USE_VFF_EXTENDED
-extern int32_t ins_baro_alt;  ///< altitude calculated from baro in meters with #INT32_POS_FRAC
-extern int32_t ins_qfe;
-extern bool_t  ins_baro_initialised;
+  /** request to realign horizontal filter.
+   * Sets to current position (local origin unchanged).
+   */
+  bool hf_realign;
+
+  /** request to reset vertical filter.
+   * Sets the z-position to zero and resets the the z-reference to current altitude.
+   */
+  bool vf_reset;
+
+  /* output LTP NED */
+  struct NedCoor_i ltp_pos;
+  struct NedCoor_i ltp_speed;
+  struct NedCoor_i ltp_accel;
+
+  /* baro */
+  float baro_z;  ///< z-position calculated from baro in meters (z-down)
+  float qfe;
+  bool baro_initialized;
+
 #if USE_SONAR
-extern bool_t  ins_update_on_agl; /* use sonar to update agl if available */
-extern int32_t ins_sonar_offset;
+  bool update_on_agl; ///< use sonar to update agl if available
 #endif
-#endif
+};
 
-/* output LTP NED               */
-extern struct NedCoor_i ins_ltp_pos;
-extern struct NedCoor_i ins_ltp_speed;
-extern struct NedCoor_i ins_ltp_accel;
-#if USE_HFF
-/* horizontal gps transformed to NED in meters as float */
-extern struct FloatVect2 ins_gps_pos_m_ned;
-extern struct FloatVect2 ins_gps_speed_m_s_ned;
-#endif
+/** global INS state */
+extern struct InsInt ins_int;
 
-/* copy position and speed to state interface */
-#define INS_NED_TO_STATE() {             \
-  stateSetPositionNed_i(&ins_ltp_pos);   \
-  stateSetSpeedNed_i(&ins_ltp_speed);    \
-  stateSetAccelNed_i(&ins_ltp_accel);    \
-}
+extern void ins_int_init(void);
+extern void ins_int_propagate(struct Int32Vect3 *accel, float dt);
+extern void ins_int_update_gps(struct GpsState *gps_s);
 
 #endif /* INS_INT_H */

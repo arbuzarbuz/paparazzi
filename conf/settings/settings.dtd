@@ -18,6 +18,10 @@
 <!ELEMENT strip_button EMPTY>
 <!ELEMENT key_press EMPTY>
 
+<!ATTLIST settings
+target CDATA #IMPLIED
+>
+
 <!ATTLIST dl_settings
 name CDATA #IMPLIED
 >
@@ -26,11 +30,12 @@ name CDATA #IMPLIED
 var CDATA #REQUIRED
 min CDATA #REQUIRED
 max CDATA #REQUIRED
+type CDATA #IMPLIED
 step CDATA #IMPLIED
+widget CDATA #IMPLIED
 shortname CDATA #IMPLIED
 module CDATA #IMPLIED
 handler CDATA #IMPLIED
-auto CDATA #IMPLIED
 param CDATA #IMPLIED
 unit CDATA #IMPLIED
 alt_unit CDATA #IMPLIED

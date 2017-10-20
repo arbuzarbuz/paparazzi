@@ -34,12 +34,14 @@ let soi = string_of_int
 
 (*********************** Preferences handling **************************)
 
+let always_keep_changes = ref false
+
 let get_entry_value = fun xml name ->
   let e = ExtXml.child ~select:(fun x -> Xml.attrib x "name" = name) xml "entry" in
   Xml.attrib e "value"
 
 let read_preferences = fun (gui:Gtk_pc.window) file (ac_combo:Gtk_tools.combo) (session_combo:Gtk_tools.combo) (target_combo:Gtk_tools.combo) ->
-  let xml = Xml.parse_file file in
+  let xml = ExtXml.parse_file file in
 
   let read_one = fun name use ->
     try
@@ -63,8 +65,14 @@ let read_preferences = fun (gui:Gtk_pc.window) file (ac_combo:Gtk_tools.combo) (
 
   (*********** Left pane size *)
   read_one "left_pane_width"
-    (fun width -> gui#vbox_left_pane#misc#set_size_request ~width:(ios width) ())
+    (fun width -> gui#vbox_left_pane#misc#set_size_request ~width:(ios width) ());
 
+  (*********** Left pane size *)
+  read_one "always keep changes"
+    (fun keep_changes ->
+      match keep_changes with
+      | "true" -> always_keep_changes := true
+      | _ -> always_keep_changes := false)
 
 
 let gconf_entry = fun name value ->
@@ -81,7 +89,7 @@ let add_entry = fun xml name value ->
 
 
 let write_preferences = fun (gui:Gtk_pc.window) file (ac_combo:Gtk_tools.combo) (session_combo:Gtk_tools.combo) (target_combo:Gtk_tools.combo) ->
-  let xml = if Sys.file_exists file then Xml.parse_file file else Xml.Element ("gconf", [], []) in
+  let xml = if Sys.file_exists file then ExtXml.parse_file file else Xml.Element ("gconf", [], []) in
 
   (* Save A/C name *)
   let xml =
@@ -101,6 +109,10 @@ let write_preferences = fun (gui:Gtk_pc.window) file (ac_combo:Gtk_tools.combo) 
       let name = Gtk_tools.combo_value target_combo in
       add_entry xml "last target" name
     with _ -> xml) in
+
+  (* save always_keep_changes choice *)
+  let xml =
+    add_entry xml "always keep changes" (string_of_bool !always_keep_changes) in
 
   let xml =
     try
@@ -122,32 +134,61 @@ let write_preferences = fun (gui:Gtk_pc.window) file (ac_combo:Gtk_tools.combo) 
   Printf.fprintf f "%s\n" (ExtXml.to_string_fmt xml);
   close_out f
 
+let backup_file_differs = fun () ->
+  if Sys.file_exists Utils.backup_xml_file then
+    ExtXml.parse_file Utils.backup_xml_file <> ExtXml.parse_file Utils.conf_xml_file
+  else
+    false
+
 let quit_callback = fun gui ac_combo session_combo target_combo _ ->
   CP.close_programs gui;
   write_preferences gui Env.gconf_file ac_combo session_combo target_combo;
   exit 0
 
-let quit_button_callback = fun gui ac_combo session_combo target_combo () ->
-  if Sys.file_exists Utils.backup_xml_file then begin
-    let rec question_box = fun () ->
-      match GToolbox.question_box ~title:"Quit" ~buttons:["Save changes"; "Discard changes"; "View changes"; "Cancel"] ~default:1 "Configuration changes have not been saved" with
-      | 2 ->
-	  Sys.rename Utils.backup_xml_file Utils.conf_xml_file;
-	  quit_callback gui ac_combo session_combo target_combo ()
-      | 3 ->
-	  ignore (Sys.command (sprintf "meld %s %s" Utils.backup_xml_file Utils.conf_xml_file));
-	  question_box ()
-      | 1 ->
+let quit_button_callback = fun gui ac_combo session_combo target_combo ?(confirm_quit = true) () ->
+  if (not !always_keep_changes) && backup_file_differs () then begin
+    let dialog = GWindow.dialog ~title:"Quit" ~modal:true () in
+    dialog#add_button "Keep changes" `APPLY;
+    dialog#add_button "Revert" `REJECT;
+    dialog#add_button "View changes" `HELP;
+    dialog#add_button "Cancel" `CANCEL;
+    let _ = GMisc.label ~text:"Configuration has been changed since startup.\nIf you want to undo the changes choose [Revert]" ~packing:dialog#vbox#pack () in
+    let checkbox = GButton.check_button ~label:"Always keep changes" ~active:!always_keep_changes ~packing:dialog#vbox#pack () in
+    ignore (checkbox#connect#toggled (fun () ->
+      always_keep_changes := checkbox#active;
+      gui#menu_item_always_keep_changes#set_active checkbox#active;));
+
+    match dialog#run () with
+      `APPLY ->
+        Sys.remove Utils.backup_xml_file;
+	    quit_callback gui ac_combo session_combo target_combo ()
+    | `REJECT ->
+      ignore (Sys.command (sprintf "cp %s %s" Utils.backup_xml_file Utils.conf_xml_file));
 	  Sys.remove Utils.backup_xml_file;
 	  quit_callback gui ac_combo session_combo target_combo ()
-      | _ -> () in
-    question_box ()
-  end else
-    match GToolbox.question_box ~title:"Quit" ~buttons:["Cancel"; "Quit"] ~default:2 "Quit ?" with
-    2 -> quit_callback gui ac_combo session_combo target_combo ()
-  | _ -> ()
+    | `HELP ->
+      ignore (Sys.command (sprintf "meld %s %s" Utils.backup_xml_file Utils.conf_xml_file))
+    | `CANCEL ->
+      dialog#destroy ()
+    | _ -> ()
+  end else begin
+    if Sys.file_exists Utils.backup_xml_file then
+      Sys.remove Utils.backup_xml_file;
+    if confirm_quit then
+      match GToolbox.question_box ~title:"Quit" ~buttons:["Cancel"; "Quit"] ~default:2 "Quit ?" with
+        2 -> quit_callback gui ac_combo session_combo target_combo ()
+      | _ -> ()
+    else
+      quit_callback gui ac_combo session_combo target_combo ()
+  end
 
+let quit_window_callback = fun gui ac_combo session_combo target_combo _ ->
+  quit_button_callback gui ac_combo session_combo target_combo ~confirm_quit:false ();
+  true
 
+let keep_changes_callback = fun gui _ ->
+  always_keep_changes := gui#menu_item_always_keep_changes#active;
+  ()
 
 (************************** Main *********************************************)
 let () =
@@ -168,12 +209,23 @@ let () =
   let paparazzi_pixbuf = GdkPixbuf.from_file Env.icon_file in
   gui#window#set_icon (Some paparazzi_pixbuf);
 
+    (* version string with whitespace/newline at the end stripped *)
+  let version_str = Env.get_paparazzi_version () in
+  let build_str =
+    try
+      let f = open_in (Env.paparazzi_home ^ "/var/build_version.txt") in
+      let s = try input_line f with _ -> "UNKNOWN" in
+      close_in f;
+      s
+    with _ -> "UNKNOWN" in
+
   let s = gui#statusbar#new_context "env" in
-  ignore (s#push (sprintf "HOME=%s SRC=%s" Env.paparazzi_home Env.paparazzi_src));
+  ignore (s#push (sprintf "HOME=%s SRC=%s \tVersion=%s \tBuild=%s" Env.paparazzi_home Env.paparazzi_src version_str build_str));
 
   if Sys.file_exists Utils.backup_xml_file then begin
     let rec question_box = fun () ->
-      match GToolbox.question_box ~title:"Backup" ~buttons:["Keep changes"; "Discard changes"; "View changes"] ~default:2 "Configuration changes made during the last session were not saved. ?" with
+      let message = "Seems that Paparazzi Center wasn't quit cleanly.\nFound an older copy of conf.xml, do you want to restore it?" in
+      match GToolbox.question_box ~title:"Backup" ~buttons:["Keep current"; "Restore"; "View changes"] ~default:1 message with
       | 2 -> Sys.rename Utils.backup_xml_file Utils.conf_xml_file
       | 3 -> ignore (Sys.command (sprintf "meld %s %s" Utils.backup_xml_file Utils.conf_xml_file)); question_box ()
       | _ -> Sys.remove Utils.backup_xml_file in
@@ -183,13 +235,13 @@ let () =
   Utils.build_aircrafts ();
 
   let ac_combo = AC.parse_conf_xml gui#vbox_ac
-  and target_combo = Gtk_tools.combo ["sim";"fbw";"ap"] gui#vbox_target in
+  and target_combo = Gtk_tools.combo ~width:50 ["sim";"fbw";"ap"] gui#vbox_target
+  and flash_combo = Gtk_tools.combo ~width:50 ["Default"] gui#vbox_flash in
 
   (Gtk_tools.combo_widget target_combo)#misc#set_sensitive false;
+  (Gtk_tools.combo_widget flash_combo)#misc#set_sensitive false;
   gui#button_clean#misc#set_sensitive false;
   gui#button_build#misc#set_sensitive false;
-
-  AC.ac_combo_handler gui ac_combo target_combo;
 
   (* Change the buffer of the text view to attach a tag_table *)
   let background_tags =
@@ -197,16 +249,18 @@ let () =
       let tag = GText.tag ~name:color () in
       tag#set_property (`BACKGROUND color);
       (color, tag))
-      ["red"; "green"; "orange"; "cyan"] in
+      (* since tcl8.6 "green" refers to "darkgreen" and the former "green" is now "lime", but that is not available in older versions, so hardcode the color to #00ff00*)
+      ["red"; "#00ff00"; "orange"; "cyan"; "yellow"] in
   let tag_table = GText.tag_table () in
   List.iter (fun (_color, tag) -> tag_table#add tag#as_tag) background_tags;
   let buffer = GText.buffer ~tag_table () in
   gui#console#set_buffer buffer;
 
-  let errors = "red", ["error"; "no such file"; "undefined reference"; "failure"; "multiple definition"]
+  let errors = "red", ["error:"; "error "; "no such file"; "undefined reference"; "failure"; "multiple definition"]
   and warnings = "orange", ["warning"]
-  and info = "green", ["pragma message"]
-  and version = "cyan", ["paparazzi version"] in
+  and minor_warnings = "yellow", ["no srtm data found"]
+  and info = "#00ff00", ["pragma message"; "info:"]
+  and version = "cyan", ["paparazzi version"; "build aircraft"] in
 
   let color_regexps =
     List.map (fun (color, strings) ->
@@ -214,7 +268,7 @@ let () =
       let s = String.concat "\\|" s in
       let s = ".*\\("^s^"\\)" in
       color, Str.regexp_case_fold s)
-      [errors; warnings; info; version] in
+      [errors; warnings; minor_warnings; info; version] in
   let compute_tags = fun s ->
     let rec loop = function
 	(color, regexp)::rs ->
@@ -234,14 +288,19 @@ let () =
     let end_mark = gui#console#buffer#create_mark end_iter in
     gui#console#scroll_mark_onscreen (`MARK end_mark) in
 
-  AC.build_handler ~file gui ac_combo target_combo log;
+  AC.ac_combo_handler gui ac_combo target_combo flash_combo log;
+
+  AC.build_handler ~file gui ac_combo target_combo flash_combo log;
 
   let session_combo, execute_session = CP.supervision ~file gui log ac_combo target_combo in
+
+  (* Autosave on quit check box *)
+  ignore (gui#menu_item_always_keep_changes#connect#toggled ~callback:(keep_changes_callback gui));
 
   (* Quit button *)
   ignore (gui#menu_item_quit#connect#activate ~callback:(quit_button_callback gui ac_combo session_combo target_combo));
 
-  ignore (gui#window#event#connect#delete ~callback:(quit_callback gui ac_combo session_combo target_combo));
+  ignore (gui#window#event#connect#delete ~callback:(quit_window_callback gui ac_combo session_combo target_combo));
 
   (* Fullscreen menu entry *)
   let callback = fun () ->
@@ -253,14 +312,54 @@ let () =
   ignore (gui#menu_item_fullscreen#connect#activate ~callback);
 
   (* Help/About menu entry *)
-  let callback = fun () ->
-    ignore (GToolbox.message_box ~title:"About Paparazzi Center" ~icon:(GMisc.image ~pixbuf:paparazzi_pixbuf ())#coerce "Copyright (C) 2007-2008 ENAC, Pascal Brisset\nhttp://paparazzi.enac.fr") in
-  ignore (gui#menu_item_about#connect#activate ~callback);
+  let aboutDialog = GWindow.about_dialog
+    ~name:"Paparazzi Center"
+    ~logo:paparazzi_pixbuf
+    ~authors:["Pascal Brisset"]
+    ~copyright:"Copyright (C) 2007-2008 ENAC, Pascal Brisset"
+    ~license:"GPLv2"
+    ~website:"http://paparazziuav.org"
+    ~website_label:"http://paparazziuav.org"
+    (*~version:version_str*)
+    ~position:`CENTER_ON_PARENT
+    ~destroy_with_parent:true
+    ~parent:gui#window
+    ()
+  in
+  ignore (gui#menu_item_about#connect#activate ~callback:(fun () -> ignore (aboutDialog#run ()); aboutDialog#misc#hide ()));
+
+  let pprzInfoDialog (title,msg) =
+    (* somehow doen't show the pprz icon, but the default info icon instead *)
+    let dlg = GWindow.message_dialog
+      ~title:title
+      ~message:msg
+      ~icon:paparazzi_pixbuf
+      ~use_markup:true
+      ~modal:true
+      ~message_type:`INFO
+      ~position:`CENTER_ON_PARENT
+      ~destroy_with_parent:true
+      ~parent:gui#window
+      ~buttons:GWindow.Buttons.close () in
+    let res = dlg#run () = `CLOSE in
+    dlg#destroy ();
+    res
+  in
+
+  (* Help/Get Help menu entry *)
+  let help_text = "Primary documentation: Paparazzi wiki:\n<a href='https://wiki.paparazziuav.org'>https://wiki.paparazziuav.org</a>\n\nCommunity-based support, mailing list: <a href='https://wiki.paparazziuav.org/wiki/Contact'>Contact</a>\n\nThe Paparazzi auto-generated developer documentation:\n<a href='http://docs.paparazziuav.org'>http://docs.paparazziuav.org</a>\n\nPaparazzi sourcecode and issue tracker:\n<a href='https://github.com/paparazzi/paparazzi'>https://github.com/paparazzi/paparazzi</a>" in
+  ignore (gui#menu_item_get_help#connect#activate ~callback:(fun () -> ignore (pprzInfoDialog ("Getting Help with Paparazzi",help_text))));
+
+  (* Version *)
+  let version_msg = ("Run version:\t" ^ version_str ^ "\nBuild version:\t" ^ build_str) in
+  ignore (gui#menu_item_version#connect#activate ~callback:(fun () -> ignore (pprzInfoDialog ("Version",version_msg))));
 
   (* Read preferences *)
   if Sys.file_exists Env.gconf_file then begin
     read_preferences gui Env.gconf_file ac_combo session_combo target_combo
   end;
+
+  gui#menu_item_always_keep_changes#set_active !always_keep_changes;
 
   (* Run the command line session *)
   if !session <> "" then begin

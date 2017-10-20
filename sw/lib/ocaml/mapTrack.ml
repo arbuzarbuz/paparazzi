@@ -28,6 +28,9 @@ module LL = Latlong
 
 module G = MapCanvas
 
+module CL = ContrastLabel
+module ACI = AcIcon
+
 let affine_pos_and_angle z xw yw angle =
   let rad_angle = angle /. 180. *. acos(-1.) in
   let cos_a = cos rad_angle in
@@ -50,23 +53,36 @@ type desired =
   | DesiredCircle of LL.geographic*float*GnoCanvas.ellipse
   | DesiredSegment of LL.geographic*LL.geographic*GnoCanvas.line
 
-
-class track = fun ?(name="Noname") ?(size = 500) ?(color="red") (geomap:MapCanvas.widget) ->
+class track = fun ?(name="Noname") ?(icon="fixedwing") ?(size = 500) ?(color="red") ?(show_carrot=true) (ac_id:string) (geomap:MapCanvas.widget) ->
   let group = GnoCanvas.group geomap#canvas#root in
   let empty = ({LL.posn_lat=0.; LL.posn_long=0.},  GnoCanvas.line group) in
   let v_empty = ({LL.posn_lat=0.; LL.posn_long=0.},  0.0) in
 
   let aircraft = GnoCanvas.group group
   and track = GnoCanvas.group group in
-  let _ac_icon =
-    ignore (GnoCanvas.line ~fill_color:color ~props:[`WIDTH_PIXELS 4;`CAP_STYLE `ROUND] ~points:[|0.;-6.;0.;14.|] aircraft);
-    ignore (GnoCanvas.line ~fill_color:color ~props:[`WIDTH_PIXELS 4;`CAP_STYLE `ROUND] ~points:[|-9.;0.;9.;0.|] aircraft);
-    ignore (GnoCanvas.line ~fill_color:color ~props:[`WIDTH_PIXELS 4;`CAP_STYLE `ROUND] ~points:[|-4.;10.;4.;10.|] aircraft) in
-  let ac_label =
-    GnoCanvas.text group ~props:[`TEXT name; `X 25.; `Y 25.; `ANCHOR `SW; `FILL_COLOR color] in
+  let icon_template = match icon with
+  | "home"          -> ACI.icon_home_template
+  | "rotorcraft"    -> ACI.icon_rotorcraft_template
+  | "quadrotor"     -> ACI.icon_quadrotor_template
+  | "hexarotor"     -> ACI.icon_hexarotor_template
+  | "octorotor"     -> ACI.icon_octorotor_template
+  | "quadrotor_x"   -> ACI.icon_quadrotor_x_template
+  | "hexarotor_x"   -> ACI.icon_hexarotor_x_template
+  | "octorotor_x"   -> ACI.icon_octorotor_x_template
+  | "quadrotor_xi"  -> ACI.icon_quadrotor_xi_template
+  | "flyingwing"    -> ACI.icon_flyingwing_template
+  | "intruder"      -> ACI.icon_intruder_template
+  | "fixedwing" | _ -> ACI.icon_fixedwing_template
+  in
+  let _ac_icon = new ACI.widget ~color ~icon_template aircraft in
+  let ac_label = new CL.widget ~name ~color 25. 25. group in
+
   let carrot = GnoCanvas.group group in
   let _ac_carrot =
-    ignore (GnoCanvas.polygon ~points:[|0.;0.;-5.;-10.;5.;-10.|] ~props:[`WIDTH_UNITS 1.;`FILL_COLOR "orange"; `OUTLINE_COLOR "orange"; `FILL_STIPPLE (Gdk.Bitmap.create_from_data ~width:2 ~height:2 "\002\001")] carrot) in
+    if show_carrot then
+      ignore (GnoCanvas.polygon ~points:[|0.;0.;-5.;-10.;5.;-10.|] ~props:[`WIDTH_UNITS 1.;`FILL_COLOR "orange"; `OUTLINE_COLOR "orange"; `FILL_STIPPLE (Gdk.Bitmap.create_from_data ~width:2 ~height:2 "\002\001")] carrot)
+    else ()
+  in
 
   let cam = GnoCanvas.group group in
 
@@ -82,12 +98,6 @@ class track = fun ?(name="Noname") ?(size = 500) ?(color="red") (geomap:MapCanva
     ignore ( GnoCanvas.ellipse ~x1: (-5.) ~y1: (-5.) ~x2: 5. ~y2: 5. ~fill_color:"red" ~props:[`WIDTH_UNITS 1.; `OUTLINE_COLOR "red"; `FILL_STIPPLE (Gdk.Bitmap.create_from_data ~width:2 ~height:2 "\002\001")] mission_target) in
   let _ = mission_target#hide () in
 
-  (** data at map scale *)
-  let max_cam_half_height_scaled = 10000.0  in
-  let max_oblic_distance_scaled = 10000.0  in
-  let min_distance_scaled = 10.  in
-  let min_height_scaled = 0.1 in
-
   let _desired_circle = GnoCanvas.ellipse group
   and _desired_segment = GnoCanvas.line group in
 
@@ -96,10 +106,10 @@ class track = fun ?(name="Noname") ?(size = 500) ?(color="red") (geomap:MapCanva
 object (self)
   val mutable top = 0
   val mutable color = color
-  val mutable segments = Array.create size empty
-  val mutable v_segments = Array.create size empty
+  val mutable segments = Array.make size empty
+  val mutable v_segments = Array.make size empty
   val mutable v_top = 0
-  val mutable v_path = Array.create 10 v_empty
+  val mutable v_path = Array.make 10 v_empty
   val mutable last = None
   val mutable last_heading = 0.0
   val mutable last_altitude = 0.0
@@ -112,13 +122,18 @@ object (self)
   val mutable v_params_on = false
   val mutable desired_track = NoDesired
   val zone = GnoCanvas.rect group
-  val mutable ac_cam_cover = GnoCanvas.rect ~fill_color:"grey" ~props:[`WIDTH_PIXELS 1 ; `FILL_STIPPLE (Gdk.Bitmap.create_from_data ~width:2 ~height:2 "\002\001")] cam
+  val mutable ac_cam_cover = GnoCanvas.polygon ~fill_color:"grey" ~props:[`WIDTH_PIXELS 1 ; `FILL_STIPPLE (Gdk.Bitmap.create_from_data ~width:2 ~height:2 "\002\001")] cam
+  val mutable event_cb = None
+  val mutable destroyed = false
   method color = color
   method set_color c = color <- c
   method track = track
   method v_path = v_path
   method aircraft = aircraft
-  method set_label = fun s -> ac_label#set [`TEXT s]
+  method id = ac_id
+  method name = name
+  method set_label = fun s ->
+          ac_label#set_name s
   method clear_one = fun i ->
     if segments.(i) != empty then begin
       (snd segments.(i))#destroy ();
@@ -150,7 +165,8 @@ object (self)
   method set_params_state = fun b ->
     params_on <- b;
     if not b then (* Reset to the default simple label *)
-      ac_label#set [`TEXT name; `Y 25.]
+      ac_label#set_name name;
+      ac_label#set_y 25.
   method set_v_params_state = fun b -> v_params_on <- b
   method set_last = fun x -> last <- x
   method last = last
@@ -193,7 +209,8 @@ object (self)
 
     if params_on then begin
       let last_height = self#height () in
-      ac_label#set [`TEXT (sprintf "%s\n%+.0f m\n%.1f m/s" name last_height last_speed); `Y 70. ]
+      ac_label#set_name (sprintf "%s\n%+.0f m\n%.1f m/s" name last_height last_speed);
+      ac_label#set_y 70.
     end;
 
     ac_label#affine_absolute (affine_pos_and_angle geomap#zoom_adj#value xw yw 0.);
@@ -206,7 +223,7 @@ object (self)
     (** draws the circular path to be followed by the aircraft in circle mode *)
   method draw_circle = fun en radius ->
     let create = fun () ->
-      desired_track <- DesiredCircle (en, radius, geomap#circle ~color:"green" en radius) in
+      desired_track <- DesiredCircle (en, radius, geomap#circle ~color:"#00ff00" en radius) in
     match desired_track with
         DesiredCircle (c, r, circle) ->
           if c <> en || r <> radius then begin
@@ -222,7 +239,7 @@ object (self)
     (** draws the linear path to be followed by the aircraft between two waypoints *)
   method draw_segment = fun en1 en2 ->
     let create = fun () ->
-      desired_track <- DesiredSegment (en1, en2, geomap#segment ~fill_color:"green" en1 en2) in
+      desired_track <- DesiredSegment (en1, en2, geomap#segment ~fill_color:"#00ff00" en1 en2) in
     match desired_track with
         DesiredCircle (c, r, circle) ->
           circle#destroy ();
@@ -253,50 +270,15 @@ object (self)
     zone#set [`X1 x1; `Y1 y1; `X2 x2; `Y2 y2; `OUTLINE_COLOR "#ffc0c0"; `WIDTH_PIXELS 2]
 
     (** moves the rectangle representing the field covered by the camera *)
-  method move_cam = fun cam_wgs84 mission_target_wgs84 ->
+  method move_cam = fun positions mission_target_wgs84 ->
     match last, cam_on with
         Some last_ac, true ->
-          let (cam_xw, cam_yw) = geomap#world_of cam_wgs84
-          and (last_xw, last_yw) = geomap#world_of last_ac
-          and last_height_scaled = self#height () in
-
-          let pt1 = { G2d.x2D = last_xw; y2D = last_yw} in
-          let pt2 = { G2d.x2D = cam_xw ; y2D = cam_yw } in
-
-      (** y axis is downwards so North vector is as follows: *)
-          let vect_north = { G2d.x2D = 0.0 ; y2D = -1.0 } in
-          let d = G2d.distance pt1 pt2 in
-          let cam_heading =
-            if d > min_distance_scaled then
-              let cam_vect_normalized = (G2d.vect_normalize (G2d.vect_make pt1 pt2)) in
-              if (G2d.dot_product vect_north cam_vect_normalized) > 0.0 then
-                norm_angle_360 ( G2d.rad2deg (asin (G2d.cross_product vect_north cam_vect_normalized)))
-              else norm_angle_360 ( G2d.rad2deg (G2d.m_pi -. asin (G2d.cross_product vect_north cam_vect_normalized)))
-            else last_heading in
-          let (angle_of_view, oblic_distance) =
-            if last_height_scaled < min_height_scaled then
-              (half_pi, max_oblic_distance_scaled)
-            else
-              let oav = atan ( d /. last_height_scaled) in
-              (oav, last_height_scaled /. (cos oav))
-          in
-          let alpha_1 = angle_of_view +. cam_half_aperture in
-          let cam_field_half_height_1 =
-            if alpha_1 < half_pi then
-              (tan alpha_1) *. last_height_scaled -. d
-            else max_cam_half_height_scaled in
-          let cam_field_half_height_2 = d -. (tan ( angle_of_view -. cam_half_aperture)) *. last_height_scaled in
-          let cam_field_half_width = ( tan (cam_half_aperture) ) *. oblic_distance in
-          ac_cam_cover#set [`X1 (-. cam_field_half_width);
-                            `Y1 (-. cam_field_half_height_1);
-                            `X2 (cam_field_half_width);
-                            `Y2(cam_field_half_height_2);
+          let points = geomap#convert_positions_to_points positions in
+          ac_cam_cover#set [`POINTS points;
                             `OUTLINE_COLOR color];
-          cam#affine_absolute (affine_pos_and_angle 1.0 cam_xw cam_yw cam_heading);
           let (mission_target_xw, mission_target_yw) = geomap#world_of mission_target_wgs84 in
           mission_target#affine_absolute (affine_pos_and_angle geomap#zoom_adj#value mission_target_xw mission_target_yw 0.0)
       | _ -> ()
-
   method zoom = fun z ->
     let a = aircraft#i2w_affine in
     let z' = sqrt (a.(0)*.a.(0)+.a.(1)*.a.(1)) in
@@ -304,7 +286,7 @@ object (self)
     aircraft#affine_absolute a
 
   method resize =  fun new_size ->
-    let a = Array.create new_size empty in
+    let a = Array.make new_size empty in
     let size =  Array.length segments in
     let m = min new_size size in
     let j = ref ((top - m + size) mod size) in
@@ -321,7 +303,35 @@ object (self)
 
   method size = Array.length segments
 
+  method event (ev : GnoCanvas.item_event) =
+    begin
+      match ev with
+        | `BUTTON_PRESS ev ->
+          begin
+            match GdkEvent.Button.button ev with
+              | 1 ->
+                  begin
+                    match event_cb with
+                    | Some cb -> cb ac_id
+                    | None -> ()
+                  end
+              | _ -> ()
+          end
+        | _ -> ()
+    end;
+    true
+  initializer ignore(aircraft#connect#event self#event)
+
+  method set_event_cb = fun (cb: string -> unit) -> event_cb <- Some cb
+
   initializer
-    ignore(geomap#zoom_adj#connect#value_changed
-             (fun () -> self#zoom geomap#zoom_adj#value))
+    (* could not properly disconnect adjustment signal, so only calling zoom method if group is still displayed *)
+    ignore(geomap#zoom_adj#connect#value_changed (fun () -> if not destroyed then self#zoom geomap#zoom_adj#value));
+    ignore(group#connect#destroy (fun () -> destroyed <- true))
+
+  (* destroy method *)
+  method destroy = fun () -> group#destroy ()
+
+  initializer
+    Gc.finalise (fun self -> self#destroy ()) self
 end

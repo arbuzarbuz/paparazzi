@@ -19,6 +19,7 @@
  * the Free Software Foundation, 59 Temple Place - Suite 330,
  * Boston, MA 02111-1307, USA.
  */
+
 /**
  * @file ahrs_gx3.c
  *
@@ -29,43 +30,31 @@
  *
  * @author Michal Podhradsky <michal.podhradsky@aggiemail.usu.edu>
  */
-#include "subsystems/ahrs/ahrs_gx3.h"
-#include "mcu_periph/sys_time.h"
 
-#define GX3_TIME(_ubx_payload) (uint32_t)((uint32_t)(*((uint8_t*)_ubx_payload+62+3))|(uint32_t)(*((uint8_t*)_ubx_payload+62+2))<<8|(uint32_t)(*((uint8_t*)_ubx_payload+62+1))<<16|(uint32_t)(*((uint8_t*)_ubx_payload+62+0))<<24)
+#include "subsystems/ahrs/ahrs_gx3.h"
+
+// for ahrs_register_impl
+#include "subsystems/ahrs.h"
+
 #define GX3_CHKSM(_ubx_payload) (uint16_t)((uint16_t)(*((uint8_t*)_ubx_payload+66+1))|(uint16_t)(*((uint8_t*)_ubx_payload+66+0))<<8)
 
-/*
+/**
  * Axis definition: X axis pointing forward, Y axis pointing to the right and Z axis pointing down.
  * Positive pitch : nose up
  * Positive roll : right wing down
  * Positive yaw : clockwise
  */
-struct GX3_packet GX3_packet;
-enum GX3Status GX3_status;
-uint32_t GX3_time;
-uint32_t GX3_ltime;
-uint16_t GX3_chksm;
-uint16_t GX3_calcsm;
-float GX3_freq;
+struct AhrsGX3 ahrs_gx3;
 
-struct FloatVect3 GX3_accel;
-struct FloatRates GX3_rate;
-struct FloatRMat  GX3_rmat;
-struct FloatQuat GX3_quat;
-struct FloatEulers GX3_euler;
-
-struct AhrsFloatQuat ahrs_impl;
-struct AhrsAligner ahrs_aligner;
-
-static inline bool_t GX3_verify_chk(volatile uint8_t *buff_add);
+static inline bool gx3_verify_chk(volatile uint8_t *buff_add);
 static inline float bef(volatile uint8_t *c);
 
 /* Big Endian to Float */
-static inline float bef(volatile uint8_t *c) {
+static inline float bef(volatile uint8_t *c)
+{
   float f;
-  int8_t * p;
-  p = ((int8_t *)&f)+3;
+  int8_t *p;
+  p = ((int8_t *)&f) + 3;
   *p-- = *c++;
   *p-- = *c++;
   *p-- = *c++;
@@ -73,244 +62,317 @@ static inline float bef(volatile uint8_t *c) {
   return f;
 }
 
-static inline bool_t GX3_verify_chk(volatile uint8_t *buff_add) {
-  uint16_t i,chk_calc;
+static inline bool gx3_verify_chk(volatile uint8_t *buff_add)
+{
+  uint16_t i, chk_calc;
   chk_calc = 0;
-  for (i=0;i<GX3_MSG_LEN-2;i++) {
-    chk_calc += (uint8_t)*buff_add++;
+  for (i = 0; i < GX3_MSG_LEN - 2; i++) {
+    chk_calc += (uint8_t) * buff_add++;
   }
-  return (chk_calc == ( (((uint16_t)*buff_add)<<8) + (uint8_t)*(buff_add+1) ));
+  return (chk_calc == ((((uint16_t) * buff_add) << 8) + (uint8_t) * (buff_add + 1)));
 }
 
-void ahrs_align(void) {
-  GX3_status = GX3Uninit;
+void ahrs_gx3_align(void)
+{
+  ahrs_gx3.is_aligned = false;
 
   //make the gyros zero, takes 10s (specified in Byte 4 and 5)
-  GX3Link(Transmit(0xcd));
-  GX3Link(Transmit(0xc1));
-  GX3Link(Transmit(0x29));
-  GX3Link(Transmit(0x27));
-  GX3Link(Transmit(0x10));
+  uart_put_byte(&GX3_PORT, 0, 0xcd);
+  uart_put_byte(&GX3_PORT, 0, 0xc1);
+  uart_put_byte(&GX3_PORT, 0, 0x29);
+  uart_put_byte(&GX3_PORT, 0, 0x27);
+  uart_put_byte(&GX3_PORT, 0, 0x10);
 
-  GX3_status = GX3Running;
+  ahrs_gx3.is_aligned = true;
 }
 
+#if PERIODIC_TELEMETRY
+#include "subsystems/datalink/telemetry.h"
 
-void imu_impl_init(void) {
+static void send_gx3(struct transport_tx *trans, struct link_device *dev)
+{
+  pprz_msg_send_GX3_INFO(trans, dev, AC_ID,
+                         &ahrs_gx3.freq,
+                         &ahrs_gx3.packet.chksm_error,
+                         &ahrs_gx3.packet.hdr_error,
+                         &ahrs_gx3.chksm);
+}
+#endif
+
+/*
+ * GX3 can be set up during the startup, or it can be configured to
+ * start sending data automatically after power up.
+ */
+void imu_gx3_init(void)
+{
   // Initialize variables
-  GX3_status = GX3Uninit;
+  ahrs_gx3.is_aligned = false;
 
   // Initialize packet
-  GX3_packet.status = GX3PacketWaiting;
-  GX3_packet.msg_idx = 0;
-  GX3_packet.msg_available = FALSE;
-  GX3_packet.chksm_error = 0;
-  GX3_packet.hdr_error = 0;
+  ahrs_gx3.packet.status = GX3PacketWaiting;
+  ahrs_gx3.packet.msg_idx = 0;
+  ahrs_gx3.packet.msg_available = false;
+  ahrs_gx3.packet.chksm_error = 0;
+  ahrs_gx3.packet.hdr_error = 0;
 
   // It is necessary to wait for GX3 to power up for proper initialization
-  for (uint32_t startup_counter=0; startup_counter<IMU_GX3_LONG_DELAY*2; startup_counter++){
+  for (uint32_t startup_counter = 0; startup_counter < IMU_GX3_LONG_DELAY * 2; startup_counter++) {
     __asm("nop");
   }
 
+#ifdef GX3_INITIALIZE_DURING_STARTUP
+#pragma message "GX3 initializing"
   /*
   // FOR NON-CONTINUOUS MODE UNCOMMENT THIS
   //4 byte command for non-Continous Mode so we can set the other settings
-  GX3Link(Transmit(0xc4));
-  GX3Link(Transmit(0xc1));
-  GX3Link(Transmit(0x29));
-  GX3Link(Transmit(0x00)); // stop
+  uart_put_byte(&GX3_PORT, 0, 0xc4);
+  uart_put_byte(&GX3_PORT, 0, 0xc1);
+  uart_put_byte(&GX3_PORT, 0, 0x29);
+  uart_put_byte(&GX3_PORT, 0, 0x00); // stop
   */
 
   //Sampling Settings (0xDB)
-  GX3Link(Transmit(0xdb)); //set update speed
-  GX3Link(Transmit(0xa8));
-  GX3Link(Transmit(0xb9));
+  uart_put_byte(&GX3_PORT, 0, 0xdb); //set update speed
+  uart_put_byte(&GX3_PORT, 0, 0xa8);
+  uart_put_byte(&GX3_PORT, 0, 0xb9);
   //set rate of IMU link, is 1000/IMU_DIV
 #define IMU_DIV1 0
 #define IMU_DIV2 2
 #define ACC_FILT_DIV 2
 #define MAG_FILT_DIV 30
-  GX3Link(Transmit(0x01));//set params, don't store
-  GX3Link(Transmit(IMU_DIV1));
-  GX3Link(Transmit(IMU_DIV2));
-  GX3Link(Transmit(0b00000000));  //set options byte 8 - GOOD
-  GX3Link(Transmit(0b00000011));  //set options byte 7 - GOOD
+#ifdef GX3_SAVE_SETTINGS
+  uart_put_byte(&GX3_PORT, 0, 0x02);//set params and save them in non-volatile memory
+#else
+  uart_put_byte(&GX3_PORT, 0, 0x02); //set and don't save
+#endif
+  uart_put_byte(&GX3_PORT, 0, IMU_DIV1);
+  uart_put_byte(&GX3_PORT, 0, IMU_DIV2);
+  uart_put_byte(&GX3_PORT, 0, 0b00000000);  //set options byte 8 - GOOD
+  uart_put_byte(&GX3_PORT, 0, 0b00000011);  //set options byte 7 - GOOD
   //0 - calculate orientation, 1 - enable coning & sculling, 2-3 reserved, 4 - no little endian data,
   // 5 - no NaN supressed, 6 - disable finite size correction, 7 - reserved,
-  // 8 - enable magnetometer, 9 - reserved, 10 - enable magnetic north compensation, 11 - enable gravity compensation
+  // 8  - enable magnetometer, 9 - reserved, 10 - enable magnetic north compensation, 11 - enable gravity compensation
   // 12 - no quaternion calculation, 13-15 reserved
-  GX3Link(Transmit(ACC_FILT_DIV));
-  GX3Link(Transmit(MAG_FILT_DIV)); //mag window filter size == 33hz
-  GX3Link(Transmit(0x00));
-  GX3Link(Transmit(10)); // Up Compensation in secs, def=10s
-  GX3Link(Transmit(0x00));
-  GX3Link(Transmit(10)); // North Compensation in secs
-  GX3Link(Transmit(0x00)); //power setting = 0, high power/bw
-  GX3Link(Transmit(0x00)); //rest of the bytes are 0
-  GX3Link(Transmit(0x00));
-  GX3Link(Transmit(0x00));
-  GX3Link(Transmit(0x00));
-  GX3Link(Transmit(0x00));
+  uart_put_byte(&GX3_PORT, 0, ACC_FILT_DIV);
+  uart_put_byte(&GX3_PORT, 0, MAG_FILT_DIV); //mag window filter size == 33hz
+  uart_put_byte(&GX3_PORT, 0, 0x00);
+  uart_put_byte(&GX3_PORT, 0, 10); // Up Compensation in secs, def=10s
+  uart_put_byte(&GX3_PORT, 0, 0x00);
+  uart_put_byte(&GX3_PORT, 0, 10); // North Compensation in secs
+  uart_put_byte(&GX3_PORT, 0, 0x00); //power setting = 0, high power/bw
+  uart_put_byte(&GX3_PORT, 0, 0x00); //rest of the bytes are 0
+  uart_put_byte(&GX3_PORT, 0, 0x00);
+  uart_put_byte(&GX3_PORT, 0, 0x00);
+  uart_put_byte(&GX3_PORT, 0, 0x00);
+  uart_put_byte(&GX3_PORT, 0, 0x00);
 
   // OPTIONAL: realign up and north
   /*
-    GX3Link(Transmit(0xdd));
-    GX3Link(Transmit(0x54));
-    GX3Link(Transmit(0x4c));
-    GX3Link(Transmit(3));
-    GX3Link(Transmit(10));
-    GX3Link(Transmit(10));
-    GX3Link(Transmit(0x00));
-    GX3Link(Transmit(0x00));
-    GX3Link(Transmit(0x00));
-    GX3Link(Transmit(0x00));
+    uart_put_byte(&GX3_PORT, 0, 0xdd);
+    uart_put_byte(&GX3_PORT, 0, 0x54);
+    uart_put_byte(&GX3_PORT, 0, 0x4c);
+    uart_put_byte(&GX3_PORT, 0, 3);
+    uart_put_byte(&GX3_PORT, 0, 10);
+    uart_put_byte(&GX3_PORT, 0, 10);
+    uart_put_byte(&GX3_PORT, 0, 0x00);
+    uart_put_byte(&GX3_PORT, 0, 0x00);
+    uart_put_byte(&GX3_PORT, 0, 0x00);
+    uart_put_byte(&GX3_PORT, 0, 0x00);
   */
 
-  // Another wait loop for proper GX3 init
-  for (uint32_t startup_counter=0; startup_counter<IMU_GX3_LONG_DELAY; startup_counter++){
+  //Another wait loop for proper GX3 init
+  for (uint32_t startup_counter = 0; startup_counter < IMU_GX3_LONG_DELAY; startup_counter++) {
     __asm("nop");
   }
 
-  //4 byte command for Continous Mode
-  GX3Link(Transmit(0xc4));
-  GX3Link(Transmit(0xc1));
-  GX3Link(Transmit(0x29));
-  GX3Link(Transmit(0xc8)); // accel,gyro,R
+#ifdef GX3_SET_WAKEUP_MODE
+  //Mode Preset (0xD5)
+  uart_put_byte(&GX3_PORT, 0, 0xD5);
+  uart_put_byte(&GX3_PORT, 0, 0xBA);
+  uart_put_byte(&GX3_PORT, 0, 0x89);
+  uart_put_byte(&GX3_PORT, 0, 0x02); // wake up in continuous mode
 
-  // Reset gyros to zerp
-  ahrs_align();
+  //Continuous preset (0xD6)
+  uart_put_byte(&GX3_PORT, 0, 0xD6);
+  uart_put_byte(&GX3_PORT, 0, 0xC6);
+  uart_put_byte(&GX3_PORT, 0, 0x6B);
+  uart_put_byte(&GX3_PORT, 0, 0xc8); // accel, gyro, R
+#endif
+
+  //4 byte command for Continous Mode
+  uart_put_byte(&GX3_PORT, 0, 0xc4);
+  uart_put_byte(&GX3_PORT, 0, 0xc1);
+  uart_put_byte(&GX3_PORT, 0, 0x29);
+  uart_put_byte(&GX3_PORT, 0, 0xc8); // accel,gyro, R
+
+  // Reset gyros to zero
+  ahrs_gx3_align();
+#endif
+
+#if PERIODIC_TELEMETRY
+  register_periodic_telemetry(DefaultPeriodic, PPRZ_MSG_ID_GX3_INFO, send_gx3);
+#endif
 }
 
 
-void imu_periodic(void) {
+void imu_gx3_periodic(void)
+{
   /* IF IN NON-CONTINUOUS MODE, REQUEST DATA NOW
-     GX3Link(Transmit(0xc8)); // accel,gyro,R
+     uart_put_byte(&GX3_PORT, 0, 0xc8); // accel,gyro, R
   */
 }
 
 
-void GX3_packet_read_message(void) {
-  GX3_accel.x     = bef(&GX3_packet.msg_buf[1]);
-  GX3_accel.y     = bef(&GX3_packet.msg_buf[5]);
-  GX3_accel.z     = bef(&GX3_packet.msg_buf[9]);
-  GX3_rate.p      = bef(&GX3_packet.msg_buf[13]);
-  GX3_rate.q      = bef(&GX3_packet.msg_buf[17]);
-  GX3_rate.r      = bef(&GX3_packet.msg_buf[21]);
-  GX3_rmat.m[0]   = bef(&GX3_packet.msg_buf[25]);
-  GX3_rmat.m[1]   = bef(&GX3_packet.msg_buf[29]);
-  GX3_rmat.m[2]   = bef(&GX3_packet.msg_buf[33]);
-  GX3_rmat.m[3]   = bef(&GX3_packet.msg_buf[37]);
-  GX3_rmat.m[4]   = bef(&GX3_packet.msg_buf[41]);
-  GX3_rmat.m[5]   = bef(&GX3_packet.msg_buf[45]);
-  GX3_rmat.m[6]   = bef(&GX3_packet.msg_buf[49]);
-  GX3_rmat.m[7]   = bef(&GX3_packet.msg_buf[53]);
-  GX3_rmat.m[8]   = bef(&GX3_packet.msg_buf[57]);
-  GX3_time  = GX3_TIME(GX3_packet.msg_buf);
-  GX3_chksm	= GX3_CHKSM(GX3_packet.msg_buf);
-  GX3_calcsm = 0;
+void gx3_packet_read_message(void)
+{
+  ahrs_gx3.accel.x     = bef(&ahrs_gx3.packet.msg_buf[1]);
+  ahrs_gx3.accel.y     = bef(&ahrs_gx3.packet.msg_buf[5]);
+  ahrs_gx3.accel.z     = bef(&ahrs_gx3.packet.msg_buf[9]);
+  ahrs_gx3.rate.p      = bef(&ahrs_gx3.packet.msg_buf[13]);
+  ahrs_gx3.rate.q      = bef(&ahrs_gx3.packet.msg_buf[17]);
+  ahrs_gx3.rate.r      = bef(&ahrs_gx3.packet.msg_buf[21]);
+  ahrs_gx3.rmat.m[0]   = bef(&ahrs_gx3.packet.msg_buf[25]);
+  ahrs_gx3.rmat.m[1]   = bef(&ahrs_gx3.packet.msg_buf[29]);
+  ahrs_gx3.rmat.m[2]   = bef(&ahrs_gx3.packet.msg_buf[33]);
+  ahrs_gx3.rmat.m[3]   = bef(&ahrs_gx3.packet.msg_buf[37]);
+  ahrs_gx3.rmat.m[4]   = bef(&ahrs_gx3.packet.msg_buf[41]);
+  ahrs_gx3.rmat.m[5]   = bef(&ahrs_gx3.packet.msg_buf[45]);
+  ahrs_gx3.rmat.m[6]   = bef(&ahrs_gx3.packet.msg_buf[49]);
+  ahrs_gx3.rmat.m[7]   = bef(&ahrs_gx3.packet.msg_buf[53]);
+  ahrs_gx3.rmat.m[8]   = bef(&ahrs_gx3.packet.msg_buf[57]);
+  ahrs_gx3.time    = (uint32_t)(ahrs_gx3.packet.msg_buf[61] << 24 |
+                                ahrs_gx3.packet.msg_buf[62] << 16 |
+                                ahrs_gx3.packet.msg_buf[63] << 8 |
+                                ahrs_gx3.packet.msg_buf[64]);
+  ahrs_gx3.chksm = GX3_CHKSM(ahrs_gx3.packet.msg_buf);
 
-  GX3_freq = ((GX3_time - GX3_ltime))/16000000.0;
-  GX3_freq = 1.0/GX3_freq;
-  GX3_ltime = GX3_time;
+  ahrs_gx3.freq = 62500.0 / (float)(ahrs_gx3.time - ahrs_gx3.ltime);
+  ahrs_gx3.ltime = ahrs_gx3.time;
 
   // Acceleration
-  VECT3_SMUL(GX3_accel, GX3_accel, 9.80665); // Convert g into m/s2
-  ACCELS_BFP_OF_REAL(imu.accel, GX3_accel);
-  imuf.accel = GX3_accel;
+  VECT3_SMUL(ahrs_gx3.accel, ahrs_gx3.accel, 9.80665); // Convert g into m/s2
+  // for compatibility with fixed point interface
+  ACCELS_BFP_OF_REAL(imu.accel, ahrs_gx3.accel);
 
   // Rates
+  // for compatibility with fixed point interface
+  RATES_BFP_OF_REAL(imu.gyro, ahrs_gx3.rate);
   struct FloatRates body_rate;
-  ahrs_impl.imu_rate = GX3_rate;
   /* compute body rates */
-  FLOAT_RMAT_TRANSP_RATEMULT(body_rate, imuf.body_to_imu_rmat, ahrs_impl.imu_rate);
+  struct FloatRMat *body_to_imu_rmat = orientationGetRMat_f(&imu.body_to_imu);
+  FLOAT_RMAT_TRANSP_RATEMULT(body_rate, *body_to_imu_rmat, ahrs_gx3.rate);
   /* Set state */
   stateSetBodyRates_f(&body_rate);
 
-  // Quaternions from rotation matrix
-  FLOAT_QUAT_OF_RMAT(GX3_quat, GX3_rmat);
-  ahrs_impl.ltp_to_imu_quat = GX3_quat;
-  /* Compute LTP to BODY quaternion */
-  struct FloatQuat ltp_to_body_quat;
-  FLOAT_QUAT_COMP_INV(ltp_to_body_quat, ahrs_impl.ltp_to_imu_quat, imuf.body_to_imu_quat);
-  stateSetNedToBodyQuat_f(&ltp_to_body_quat);
+  // Attitude
+  struct FloatRMat ltp_to_body_rmat;
+  float_rmat_comp(ltp_to_body_rmat, ahrs_gx3.rmat, *body_to_imu_rmat);
 
-  // TODO: compensate for magnetic offset
+#if AHRS_USE_GPS_HEADING && USE_GPS
+  struct FloatEulers ltp_to_body_eulers;
+  float_eulers_of_rmat(&ltp_to_body_eulers, &ltp_to_body_rmat);
+  float course_f = (float)DegOfRad(gps.course / 1e7);
+  if (course_f > 180.0) {
+    course_f -= 360.0;
+  }
+  ltp_to_body_eulers.psi = (float)RadOfDeg(course_f);
+  stateSetNedToBodyEulers_f(&ltp_to_body_eulers);
+#else // !AHRS_USE_GPS_HEADING
+#ifdef IMU_MAG_OFFSET
+  struct FloatEulers ltp_to_body_eulers;
+  float_eulers_of_rmat(&ltp_to_body_eulers, &ltp_to_body_rmat);
+  ltp_to_body_eulers.psi -= ahrs_gx3.mag_offset;
+  stateSetNedToBodyEulers_f(&ltp_to_body_eulers);
+#else
+  stateSetNedToBodyRMat_f(&ltp_to_body_rmat);
+#endif // IMU_MAG_OFFSET
+#endif // !AHRS_USE_GPS_HEADING
 }
 
 
 /* GX3 Packet Collection */
-void GX3_packet_parse( uint8_t c ) {
-  switch (GX3_packet.status) {
+void gx3_packet_parse(uint8_t c)
+{
+  switch (ahrs_gx3.packet.status) {
     case GX3PacketWaiting:
-      GX3_packet.msg_idx = 0;
+      ahrs_gx3.packet.msg_idx = 0;
       if (c == GX3_HEADER) {
-        GX3_packet.status++;
-        GX3_packet.msg_buf[GX3_packet.msg_idx] = c;
-        GX3_packet.msg_idx++;
+        ahrs_gx3.packet.status++;
+        ahrs_gx3.packet.msg_buf[ahrs_gx3.packet.msg_idx] = c;
+        ahrs_gx3.packet.msg_idx++;
       } else {
-        GX3_packet.hdr_error++;
+        ahrs_gx3.packet.hdr_error++;
       }
       break;
     case GX3PacketReading:
-      GX3_packet.msg_buf[GX3_packet.msg_idx] =  c;
-      GX3_packet.msg_idx++;
-      if (GX3_packet.msg_idx == GX3_MSG_LEN) {
-        if (GX3_verify_chk(GX3_packet.msg_buf)) {
-          GX3_packet.msg_available = TRUE;
+      ahrs_gx3.packet.msg_buf[ahrs_gx3.packet.msg_idx] =  c;
+      ahrs_gx3.packet.msg_idx++;
+      if (ahrs_gx3.packet.msg_idx == GX3_MSG_LEN) {
+        if (gx3_verify_chk(ahrs_gx3.packet.msg_buf)) {
+          ahrs_gx3.packet.msg_available = true;
         } else {
-          GX3_packet.msg_available = FALSE;
-          GX3_packet.chksm_error++;
+          ahrs_gx3.packet.msg_available = false;
+          ahrs_gx3.packet.chksm_error++;
         }
-        GX3_packet.status = 0;
+        ahrs_gx3.packet.status = 0;
       }
       break;
     default:
-      GX3_packet.status = 0;
-      GX3_packet.msg_idx = 0;
+      ahrs_gx3.packet.status = 0;
+      ahrs_gx3.packet.msg_idx = 0;
       break;
   }
 }
 
-void ahrs_init(void) {
-  ahrs.status = AHRS_UNINIT;
-
+void ahrs_gx3_init(void)
+{
   /* set ltp_to_imu so that body is zero */
-  QUAT_COPY(ahrs_impl.ltp_to_imu_quat, imuf.body_to_imu_quat);
-  FLOAT_RATES_ZERO(ahrs_impl.imu_rate);
-
+  struct FloatQuat *body_to_imu_quat = orientationGetQuat_f(&imu.body_to_imu);
+  QUAT_COPY(ahrs_gx3.ltp_to_imu_quat, *body_to_imu_quat);
 #ifdef IMU_MAG_OFFSET
-  ahrs_impl.mag_offset = IMU_MAG_OFFSET;
+  ahrs_gx3.mag_offset = IMU_MAG_OFFSET;
 #else
-  ahrs_impl.mag_offset = 0.;
+  ahrs_gx3.mag_offset = 0.0;
 #endif
-
-  ahrs_aligner.status = AHRS_ALIGNER_LOCKED;
+  ahrs_gx3.is_aligned = false;
 }
 
-void ahrs_aligner_run(void) {
-#ifdef AHRS_ALIGNER_LED
-  LED_TOGGLE(AHRS_ALIGNER_LED);
-#endif
+void ahrs_gx3_register(void)
+{
+  ahrs_gx3_init();
+  /// @todo: provide enable function
+  ahrs_register_impl(NULL);
+}
 
-  if (GX3_freq > GX3_MIN_FREQ) {
-    ahrs.status = AHRS_RUNNING;
-#ifdef AHRS_ALIGNER_LED
-    LED_ON(AHRS_ALIGNER_LED);
-#endif
+
+/* no scaling */
+void imu_scale_gyro(struct Imu *_imu __attribute__((unused))) {}
+void imu_scale_accel(struct Imu *_imu __attribute__((unused))) {}
+void imu_scale_mag(struct Imu *_imu __attribute__((unused))) {}
+
+void ahrs_gx3_publish_imu(void)
+{
+  uint32_t now_ts = get_sys_time_usec();
+  AbiSendMsgIMU_GYRO_INT32(IMU_GX3_ID, now_ts, &imu.gyro);
+  AbiSendMsgIMU_ACCEL_INT32(IMU_GX3_ID, now_ts, &imu.accel);
+  AbiSendMsgIMU_MAG_INT32(IMU_GX3_ID, now_ts, &imu.mag);
+}
+
+static inline void ReadGX3Buffer(void)
+{
+  while (uart_char_available(&GX3_PORT) && !ahrs_gx3.packet.msg_available) {
+    gx3_packet_parse(uart_getch(&GX3_PORT));
   }
 }
 
-void ahrs_aligner_init(void) {
-}
-
-void ahrs_propagate(void) {
-}
-
-void ahrs_update_accel(void) {
-}
-
-void ahrs_update_mag(void) {
-}
-
-void ahrs_update_gps(void) {
+void imu_gx3_event(void)
+{
+  if (uart_char_available(&GX3_PORT)) {
+    ReadGX3Buffer();
+  }
+  if (ahrs_gx3.packet.msg_available) {
+    gx3_packet_read_message();
+    ahrs_gx3_publish_imu();
+    ahrs_gx3.packet.msg_available = false;
+  }
 }

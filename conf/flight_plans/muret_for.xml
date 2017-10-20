@@ -9,12 +9,12 @@
   <blocks>
     <block name="init">
       <while cond="(!launch)"/>
-      <heading course="QFU" throttle="0.8" pitch="10" until="(autopilot_flight_time > 8)" vmode="throttle"/>
+      <heading course="QFU" throttle="0.8" pitch="10" until="(autopilot.flight_time > 8)" vmode="throttle"/>
       <heading climb="3.0" course="QFU" pitch="10" until="(GetPosAlt() > SECURITY_ALT)" vmode="climb"/>
     </block>
     <block name="for">
       <for from="0" to="3" var="i">
-        <circle alt="ground_alt+50+50*$i" radius="75" until="stage_time>10" wp="HOME"/>
+        <circle alt="GetAltRef()+50+50*$i" radius="75" until="stage_time>10" wp="HOME"/>
       </for>
       <circle wp="HOME" radius="50"/>
     </block>

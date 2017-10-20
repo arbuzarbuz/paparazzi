@@ -27,14 +27,15 @@
 #include "peripherals/mcp355x.h"
 #include "mcu_periph/spi.h"
 
-bool_t mcp355x_data_available;
+bool mcp355x_data_available;
 int32_t mcp355x_data;
 uint8_t mcp355x_val[4];
 
 struct spi_transaction mcp355x_spi_trans;
 
-void mcp355x_init(void) {
-  mcp355x_data_available = FALSE;
+void mcp355x_init(void)
+{
+  mcp355x_data_available = false;
   mcp355x_data = 0;
 
   mcp355x_spi_trans.input_length = 4;
@@ -51,19 +52,21 @@ void mcp355x_init(void) {
   mcp355x_spi_trans.cdiv = SPIDiv64;
 }
 
-void mcp355x_read(void) {
+void mcp355x_read(void)
+{
   spi_submit(&spi1, &mcp355x_spi_trans);
 }
 
-void mcp355x_event(void) {
+void mcp355x_event(void)
+{
   if (mcp355x_spi_trans.status == SPITransSuccess) {
-    if ((mcp355x_spi_trans.input_buf[0]>>4) == 0) {
+    if ((mcp355x_spi_trans.input_buf[0] >> 4) == 0) {
       mcp355x_data = (int32_t)(
-          ((uint32_t)mcp355x_spi_trans.input_buf[0]<<17) |
-          ((uint32_t)mcp355x_spi_trans.input_buf[1]<<9) |
-          ((uint32_t)mcp355x_spi_trans.input_buf[2]<<1) |
-          (mcp355x_spi_trans.input_buf[3]>>7));
-      mcp355x_data_available = TRUE;
+                       ((uint32_t)mcp355x_spi_trans.input_buf[0] << 17) |
+                       ((uint32_t)mcp355x_spi_trans.input_buf[1] << 9) |
+                       ((uint32_t)mcp355x_spi_trans.input_buf[2] << 1) |
+                       (mcp355x_spi_trans.input_buf[3] >> 7));
+      mcp355x_data_available = true;
     }
     mcp355x_spi_trans.status = SPITransDone;
   }

@@ -31,16 +31,18 @@
 #include "mcu_periph/spi.h"
 #include "mcu_periph/uart.h"
 #ifndef BARO_NO_DOWNLINK
-#include "ap_downlink.h"
+#include "subsystems/datalink/downlink.h"
 #endif
-#include "subsystems/nav.h"
+#include "subsystems/abi.h"
+#include "firmwares/fixedwing/nav.h"
 #include "state.h"
 
-bool_t baro_MS5534A_do_reset;
+
+bool baro_MS5534A_do_reset;
 uint32_t baro_MS5534A_pressure;
 uint16_t baro_MS5534A_temp;
-bool_t baro_MS5534A_available;
-bool_t alt_baro_enabled;
+bool baro_MS5534A_available;
+bool alt_baro_enabled;
 uint32_t baro_MS5534A_ground_pressure;
 float baro_MS5534A_r;
 float baro_MS5534A_sigma2;
@@ -56,17 +58,17 @@ float baro_MS5534A_z;
 #define STATUS_RESET               6
 
 static uint8_t status;
-static bool_t status_read_data;
+static bool status_read_data;
 static uint16_t words[4];
 
 #define InitStatus() (status <= STATUS_INIT4)
 
 #define NextStatus() { \
-  if (status_read_data) { \
-    status++; if (status > STATUS_MEASURE_TEMPERATURE) status = STATUS_MEASURE_PRESSURE; \
-  }; \
-  status_read_data = !status_read_data; \
-}
+    if (status_read_data) { \
+      status++; if (status > STATUS_MEASURE_TEMPERATURE) status = STATUS_MEASURE_PRESSURE; \
+    }; \
+    status_read_data = !status_read_data; \
+  }
 
 #define CMD_INIT        0x1D
 #define CMD_MEASUREMENT 0x0F
@@ -111,16 +113,17 @@ static uint8_t buf_output[3];
 #define PWM_DUTY (PWM_PERIOD / 2)
 
 
-static void calibration( void );
+static void calibration(void);
 
-void baro_MS5534A_init( void ) {
+void baro_MS5534A_init(void)
+{
   /* 32768Hz on PWM2 */
   /* Configure P0.7 pin as PWM */
   PINSEL0 &= ~(_BV(14));
   PINSEL0 |= _BV(15);
 
   /* No prescaler */
-  PWMPR = PWM_PRESCALER-1;
+  PWMPR = PWM_PRESCALER - 1;
 
   /* To get 32768Hz from a base frequency of 15MHz */
   PWMMR0 = PWM_PERIOD;
@@ -137,32 +140,34 @@ void baro_MS5534A_init( void ) {
   words[3] = BARO_MS5534A_W4;
 
   status = STATUS_MEASURE_PRESSURE;
-  status_read_data = FALSE;
+  status_read_data = false;
 
   calibration();
 #else
   status = STATUS_INIT1;
-  status_read_data = FALSE;
+  status_read_data = false;
 #endif
 
 
 
-  baro_MS5534A_available = FALSE;
-  alt_baro_enabled = FALSE;
+  baro_MS5534A_available = false;
+  alt_baro_enabled = false;
 
   baro_MS5534A_ground_pressure = 101300;
   baro_MS5534A_r = 20.;
   baro_MS5534A_sigma2 = 1;
-  baro_MS5534A_do_reset = FALSE;
+  baro_MS5534A_do_reset = false;
 }
 
-void baro_MS5534A_reset( void ) {
+void baro_MS5534A_reset(void)
+{
   status = STATUS_INIT1;
-  status_read_data = FALSE;
+  status_read_data = false;
 }
 
 /* To be called not faster than 30Hz */
-void baro_MS5534A_send(void) {
+void baro_MS5534A_send(void)
+{
   if (!SpiCheckAvailable()) {
     SpiOverRun();
     return;
@@ -170,8 +175,9 @@ void baro_MS5534A_send(void) {
 
   if (status == STATUS_RESET) {
     uint8_t i;
-    for(i = 0; i < 3; i++)
+    for (i = 0; i < 3; i++) {
       buf_output[i] = reset[i];
+    }
     spi_buffer_length = 3;
   } else {
     if (status_read_data) {
@@ -183,12 +189,13 @@ void baro_MS5534A_send(void) {
     spi_buffer_length = 2;
   }
 
-  spi_buffer_input = (uint8_t*)&buf_input;
-  spi_buffer_output = (uint8_t*)&buf_output;
-  if (status_read_data)
+  spi_buffer_input = (uint8_t *)&buf_input;
+  spi_buffer_output = (uint8_t *)&buf_output;
+  if (status_read_data) {
     SpiSetCPHA();
-  else
+  } else {
     SpiClrCPHA();
+  }
   SpiStart();
 }
 
@@ -196,7 +203,8 @@ static uint16_t d1, d2;
 static uint16_t c1, c2, c3, c4, ut1, c6;
 
 
-static void calibration( void ) {
+static void calibration(void)
+{
   /* End of init, configuration (page 11) */
   c1 = words[0] >> 1;
   c2 = ((words[2] & 0x3f) << 6) | (words[3] & 0x3f);
@@ -215,32 +223,33 @@ static void calibration( void ) {
 
 
 /* Handle the SPI message, i.e. store the received values in variables */
-void baro_MS5534A_event_task( void ) {
+void baro_MS5534A_event_task(void)
+{
   if (status_read_data) {
     switch (status) {
-    case STATUS_MEASURE_PRESSURE:
-      d1 = Uint16(buf_input);
-      break;
-    case STATUS_MEASURE_TEMPERATURE:
-      d2 = Uint16(buf_input);
-      /* Compute pressure and temp (page 10) */
-      int16_t dT = d2 - ut1;
-      baro_MS5534A_temp = 200 + (dT*(c6+50)) / (1 << 10);
-      int16_t off = c2*4 + ((c4-512)*dT)/(1 << 12);
-      uint32_t sens = c1 + (c3*dT)/(1<<10) + 24576;
-      uint16_t x = (sens*(d1-7168))/(1<<14) - off;
-      // baro_MS5534A = ((x*10)>>5) + 250*10;
-      baro_MS5534A_pressure = ((x*100)>>5) + 250*100;
-      baro_MS5534A_available = TRUE;
+      case STATUS_MEASURE_PRESSURE:
+        d1 = Uint16(buf_input);
+        break;
+      case STATUS_MEASURE_TEMPERATURE:
+        d2 = Uint16(buf_input);
+        /* Compute pressure and temp (page 10) */
+        int16_t dT = d2 - ut1;
+        baro_MS5534A_temp = 200 + (dT * (c6 + 50)) / (1 << 10);
+        int16_t off = c2 * 4 + ((c4 - 512) * dT) / (1 << 12);
+        uint32_t sens = c1 + (c3 * dT) / (1 << 10) + 24576;
+        uint16_t x = (sens * (d1 - 7168)) / (1 << 14) - off;
+        // baro_MS5534A = ((x*10)>>5) + 250*10;
+        baro_MS5534A_pressure = ((x * 100) >> 5) + 250 * 100;
+        baro_MS5534A_available = true;
 
-      break;
-    case STATUS_RESET:
-      break;
-    default: /* Init status */
-      words[status] = Uint16(buf_input);
-      if (status == STATUS_INIT4) {
-        calibration();
-      }
+        break;
+      case STATUS_RESET:
+        break;
+      default: /* Init status */
+        words[status] = Uint16(buf_input);
+        if (status == STATUS_INIT4) {
+          calibration();
+        }
     }
   } /* else nothing to read */
 
@@ -251,17 +260,20 @@ void baro_MS5534A_event_task( void ) {
   }
 }
 
-void baro_MS5534A_event( void ) {
+void baro_MS5534A_event(void)
+{
   if (spi_message_received) {
     /* Got a message on SPI. */
-    spi_message_received = FALSE;
+    spi_message_received = false;
     baro_MS5534A_event_task();
     if (baro_MS5534A_available) {
-    //  baro_MS5534A_available = FALSE; // Checked by INS
-      baro_MS5534A_z = ground_alt +((float)baro_MS5534A_ground_pressure - baro_MS5534A_pressure)*0.084;
-    //  if (alt_baro_enabled) {
-    //    EstimatorSetAlt(baro_MS5534A_z); // Updated by INS
-    //  }
+      baro_MS5534A_available = false;
+      baro_MS5534A_z = ground_alt + ((float)baro_MS5534A_ground_pressure - baro_MS5534A_pressure) * 0.084;
+#if SENSO_SYNC_SEND
+      DOWNLINK_SEND_BARO_MS5534A(DefaultChannel, DefaultDevice, &baro_MS5534A_pressure, &baro_MS5534A_temp, &baro_MS5534A_z);
+#endif
+      float pressure = (float)baro_MS5534A_pressure;
+      AbiSendMsgBARO_ABS(BARO_MS5534A_SENDER_ID, pressure);
     }
   }
 }

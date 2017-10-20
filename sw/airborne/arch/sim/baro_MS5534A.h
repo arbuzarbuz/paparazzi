@@ -34,11 +34,11 @@
 
 #if USE_BARO_MS5534A
 
-extern bool_t spi_message_received;
-extern bool_t baro_MS5534A_available;
+extern bool spi_message_received;
+extern bool baro_MS5534A_available;
 extern uint32_t baro_MS5534A_pressure;
 extern uint16_t baro_MS5534A_temp;
-extern bool_t alt_baro_enabled;
+extern bool alt_baro_enabled;
 extern uint32_t baro_MS5534A_ground_pressure;
 extern float baro_MS5534A_r;
 extern float baro_MS5534A_sigma2;
@@ -52,7 +52,7 @@ void baro_MS5534A_reset(void);
 void baro_MS5534A_send(void);
 
 /* Set baro_MS5534A_available when pressure and temp are readable */
-void baro_MS5534A_event_task( void );
+void baro_MS5534A_event_task(void);
 
 #endif // USE_BARO_MS5534A
 

@@ -23,14 +23,15 @@
 open Latlong
 
 type ac_cam = {
-  mutable phi : float; (* Rad, right = >0 *)
-  mutable theta : float; (* Rad, front = >0 *)
+  mutable pan : float; (* Rad, right = >0 *)
+  mutable tilt : float; (* Rad, front = >0 *)
   mutable target : (float * float) (* meter*meter relative *)
 }
 
 type rc_status = string (** OK, LOST, REALLY_LOST *)
 type rc_mode = string (** MANUAL, AUTO, FAILSAFE *)
 type fbw = {
+  mutable fbw_bat : float;
   mutable rc_status : rc_status;
   mutable rc_mode : rc_mode;
   mutable rc_rate : int;
@@ -57,6 +58,38 @@ let svinfo_init = fun () ->
     elev = 0;
     azim = 0;
     age = 0
+  }
+
+type datalink_status = {
+    mutable uplink_lost_time : int;
+    mutable uplink_msgs : int;
+    mutable downlink_msgs : int;
+    mutable downlink_rate : int;
+ }
+type link_status = {
+    rx_lost_time : int;
+    rx_bytes : int;
+    rx_msgs : int;
+    rx_bytes_rate : float;
+    tx_msgs : int;
+    ping_time : float
+ }
+
+let datalink_status_init = fun () ->
+  {
+    uplink_lost_time = 9999;
+    uplink_msgs = 0;
+    downlink_msgs = 0;
+    downlink_rate = 0;
+  }
+let link_status_init = fun () ->
+  {
+    rx_lost_time = 9999;
+    rx_bytes = 0;
+    rx_msgs = 0;
+    rx_bytes_rate = 0.;
+    tx_msgs = 0;
+    ping_time = 9999.
   }
 
 type inflight_calib = {
@@ -101,6 +134,16 @@ let add_pos_to_nav_ref = fun nav_ref  ?(z = 0.) (x, y) ->
 
 type waypoint = { altitude : float; wp_geo : Latlong.geographic }
 
+let get_cam_aov = fun af_xml ->
+  let default_cam_aov = ((Deg>>Rad)65. , (Deg>>Rad)35.) in
+  try
+    let gcs_section = ExtXml.child af_xml ~select:(fun x -> Xml.attrib x "name" = "CAM") "section" in
+    let fvalue = fun name default->
+      try ExtXml.float_attrib (ExtXml.child gcs_section ~select:(fun x -> ExtXml.attrib x "name" = name) "define") "value" with _ -> default in
+    (Deg>>Rad) (fvalue "CAM_HFV" 65.),
+   (Deg>>Rad) (fvalue "CAM_VFV" 35.)
+  with _ -> default_cam_aov
+
 type aircraft = {
   mutable vehicle_type : vehicle_type;
   id : string;
@@ -109,17 +152,19 @@ type aircraft = {
   airframe : Xml.xml;
   mutable pos : Latlong.geographic;
   mutable unix_time : float;
-  mutable itow : int32; (* ms *)
+  mutable itow : int64; (* ms *)
   mutable roll    : float;
   mutable pitch   : float;
   mutable heading  : float; (* rad, CW 0=N *)
   mutable gspeed  : float; (* m/s *)
+  mutable airspeed : float; (* m/s *)
   mutable course : float; (* rad *)
   mutable alt     : float;
   mutable agl     : float;
   mutable climb   : float;
   mutable nav_ref : nav_ref option;
   mutable d_hmsl : float;
+  mutable ground_alt : float; (* ground alt ref if no SRTM data *)
   mutable desired_pos    : Latlong.geographic;
   mutable desired_altitude    : float;
   mutable desired_course : float;
@@ -140,6 +185,7 @@ type aircraft = {
   mutable horizontal_mode : int;
   mutable periodic_callbacks : Glib.Timeout.id list;
   cam : ac_cam;
+  camaov : (float * float);
   mutable gps_mode : int;
   mutable gps_Pacc : int;
   mutable state_filter_mode : int;
@@ -150,13 +196,16 @@ type aircraft = {
   mutable stage_time : int;
   mutable block_time : int;
   mutable horiz_mode : horiz_mode;
-  dl_setting_values : float array;
+  dl_setting_values : float option array;
   mutable nb_dl_setting_values : int;
   mutable survey : (Latlong.geographic * Latlong.geographic) option;
+  datalink_status : datalink_status;
+  link_status : (int, link_status) Hashtbl.t;
   mutable last_msg_date : float;
   mutable time_since_last_survey_msg : float;
   mutable dist_to_wp : float;
-  inflight_calib : inflight_calib
+  inflight_calib : inflight_calib;
+  mutable ap_modes : string array option
 }
 
 let max_nb_dl_setting_values = 256 (** indexed iwth an uint8 (messages.xml)  *)
@@ -165,27 +214,38 @@ let new_aircraft = fun id name fp airframe ->
   let svsinfo_init = Array.init gps_nb_channels (fun _ -> svinfo_init ()) in
   { vehicle_type = UnknownVehicleType; id = id; name = name; flight_plan = fp; airframe = airframe;
     pos = { Latlong.posn_lat = 0.; posn_long = 0. };
-    unix_time = 0.; itow = Int32.of_int 0;
+    unix_time = 0.; itow = Int64.of_int 0;
     roll = 0.; pitch = 0.;
-    gspeed=0.; course = 0.; heading = 0.; alt=0.; climb=0.; agl = 0.;
-    nav_ref = None; d_hmsl = 0.;
+    gspeed=0.; airspeed= -1.; course = 0.; heading = 0.; alt=0.; climb=0.; agl = 0.;
+    nav_ref = None; d_hmsl = 0.; ground_alt = 0.;
     desired_pos = { Latlong.posn_lat = 0.; posn_long = 0. };
     desired_course = 0.; desired_altitude = 0.; desired_climb = 0.;
     cur_block=0; cur_stage=0;
     flight_time = 0; stage_time = 0; block_time = 0;
-    throttle = 0.; throttle_accu = 0.; rpm = 0.; temp = 0.; bat = 42.; amp = 0.; energy = 0; ap_mode= -1;
+    throttle = 0.; throttle_accu = 0.; rpm = 0.; temp = 0.; bat = 0.; amp = 0.; energy = 0; ap_mode= -1;
     kill_mode = false;
     gaz_mode= -1; lateral_mode= -1;
     gps_mode = 0; gps_Pacc = 0; periodic_callbacks = [];
     state_filter_mode = 0;
-    cam = { phi = 0.; theta = 0. ; target=(0.,0.)};
-    fbw = { rc_status = "???"; rc_mode = "???"; rc_rate=0; pprz_mode_msgs_since_last_fbw_status_msg=0 };
+    cam = { pan = 0.; tilt = 0. ; target=(0.,0.)};
+    camaov = get_cam_aov airframe;
+    fbw = { rc_status = "???"; rc_mode = "???"; rc_rate=0; fbw_bat=0.; pprz_mode_msgs_since_last_fbw_status_msg=0 };
     svinfo = svsinfo_init;
-    dl_setting_values = Array.create max_nb_dl_setting_values 42.;
+    dl_setting_values = Array.make max_nb_dl_setting_values None;
     nb_dl_setting_values = 0;
     horiz_mode = UnknownHorizMode;
     horizontal_mode = 0;
     waypoints = Hashtbl.create 3; survey = None; last_msg_date = 0.; dist_to_wp = 0.;
+    datalink_status = datalink_status_init (); link_status = Hashtbl.create 1;
     time_since_last_survey_msg = 1729.;
-    inflight_calib = { if_mode = 1 ; if_val1 = 0.; if_val2 = 0.}
+    inflight_calib = { if_mode = 1 ; if_val1 = 0.; if_val2 = 0.};
+    ap_modes = None
   }
+
+let modes_of_aircraft = fun ac ->
+  match ac.ap_modes, ac.vehicle_type with
+  | Some m, _ -> m
+  | None, FixedWing -> Server_globals.fixedwing_ap_modes
+  | None, Rotorcraft -> Server_globals.rotorcraft_ap_modes
+  | None, _ -> [| "UKN" |]
+

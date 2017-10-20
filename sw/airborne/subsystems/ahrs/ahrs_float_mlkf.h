@@ -21,7 +21,7 @@
  */
 
 /**
- * @file subsystems/ahrs/ahrs_float_mlkf_opt.h
+ * @file subsystems/ahrs/ahrs_float_mlkf.h
  *
  * Multiplicative linearized Kalman Filter in quaternion formulation.
  *
@@ -31,35 +31,47 @@
 #ifndef AHRS_FLOAT_MLKF_H
 #define AHRS_FLOAT_MLKF_H
 
-#include "subsystems/ahrs.h"
 #include "std.h"
 #include "math/pprz_algebra_float.h"
+#include "math/pprz_orientation_conversion.h"
+
+enum AhrsMlkfStatus {
+  AHRS_MLKF_UNINIT,
+  AHRS_MLKF_RUNNING
+};
 
 struct AhrsMlkf {
   struct FloatQuat   ltp_to_imu_quat;  ///< Rotation from LocalTangentPlane to IMU frame as unit quaternion
-  struct FloatEulers ltp_to_imu_euler; ///< Rotation from LocalTangentPlane to IMU frame as Euler angles
-  struct FloatRMat   ltp_to_imu_rmat;  ///< Rotation from LocalTangentPlane to IMU frame as Rotation Matrix
+  struct FloatQuat   ltp_to_body_quat; ///< Rotation from LocalTangentPlane to body frame as unit quaternion
   struct FloatRates  imu_rate;         ///< Rotational velocity in IMU frame
-  struct FloatRates  imu_rate_previous;
-  struct FloatRates  imu_rate_d;
-
-  struct FloatQuat   ltp_to_body_quat;  ///< Rotation from LocalTangentPlane to body frame as unit quaternion
-  struct FloatEulers ltp_to_body_euler; ///< Rotation from LocalTangentPlane to body frame as Euler angles
-  struct FloatRMat   ltp_to_body_rmat;  ///< Rotation from LocalTangentPlane to body frame as Rotation Matrix
-  struct FloatRates  body_rate;         ///< Rotational velocity in body frame
-  struct FloatRates  body_rate_d;
-
   struct FloatRates  gyro_bias;
 
+  struct FloatVect3  mag_h;
+
+  struct FloatVect3  mag_noise;
 
   struct FloatQuat  gibbs_cor;
   float P[6][6];
   float lp_accel;
-  // Holds float version of IMU alignement
-  struct FloatQuat body_to_imu_quat;
-  struct FloatRMat body_to_imu_rmat;
+
+  /** body_to_imu rotation */
+  struct OrientationReps body_to_imu;
+
+  enum AhrsMlkfStatus status;
+  bool is_aligned;
 };
 
-extern struct AhrsMlkf ahrs_impl;
+extern struct AhrsMlkf ahrs_mlkf;
+
+extern void ahrs_mlkf_init(void);
+extern void ahrs_mlkf_set_body_to_imu(struct OrientationReps *body_to_imu);
+extern void ahrs_mlkf_set_body_to_imu_quat(struct FloatQuat *q_b2i);
+extern bool ahrs_mlkf_align(struct FloatRates *lp_gyro, struct FloatVect3 *lp_accel,
+                              struct FloatVect3 *lp_mag);
+extern void ahrs_mlkf_propagate(struct FloatRates *gyro, float dt);
+extern void ahrs_mlkf_update_accel(struct FloatVect3 *accel);
+extern void ahrs_mlkf_update_mag(struct FloatVect3 *mag);
+extern void ahrs_mlkf_update_mag_2d(struct FloatVect3 *mag);
+extern void ahrs_mlkf_update_mag_full(struct FloatVect3 *mag);
 
 #endif /* AHRS_FLOAT_MLKF_H */

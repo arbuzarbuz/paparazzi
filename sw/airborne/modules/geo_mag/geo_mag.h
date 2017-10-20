@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2012  Sergey Krukowski <softsr@yahoo.de>
+ * Copyright (C) 2015  OpenUAS <info@openuas.org>
  *
  * This file is part of paparazzi.
  *
@@ -21,26 +22,26 @@
 
 /**
  * @file modules/geo_mag/geo_mag.h
- * @brief Calculation of the Geomagnetic field vector based on current GPS fix.
- * This module based on the WMM2010 modell (http://www.ngdc.noaa.gov/geomag/models.shtml).
+ * @brief Calculation of the Geomagnetic field vector from current location.
+ * This module is based on the WMM2015 model (http://www.ngdc.noaa.gov/geomag/WMM/DoDWMM.shtml).
  */
 
 #ifndef GEO_MAG_H
 #define GEO_MAG_H
 
 #include "std.h"
+#include "math/pprz_algebra_double.h"
 
-struct GeoMagVect {
-  double x;
-  double y;
-  double z;
-  bool_t ready;
+struct GeoMag {
+  struct DoubleVect3 vect;
+  bool calc_once;
+  bool ready;
 };
 
 extern void geo_mag_init(void);
 extern void geo_mag_periodic(void);
 extern void geo_mag_event(void);
 
-extern struct GeoMagVect geo_mag_vect;
+extern struct GeoMag geo_mag;
 
 #endif

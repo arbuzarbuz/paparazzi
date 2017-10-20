@@ -24,10 +24,38 @@
  *
  * MPU-60X0 driver common functions (I2C and SPI).
  *
- * Still needs the either the I2C or SPI specific implementation.
+ * Still needs the either I2C or SPI specific implementation.
  */
 
 #include "peripherals/mpu60x0.h"
+
+const float MPU60X0_GYRO_SENS[4] = {
+  MPU60X0_GYRO_SENS_250,
+  MPU60X0_GYRO_SENS_500,
+  MPU60X0_GYRO_SENS_1000,
+  MPU60X0_GYRO_SENS_2000
+};
+
+const int32_t MPU60X0_GYRO_SENS_FRAC[4][2] = {
+  { MPU60X0_GYRO_SENS_250_NUM, MPU60X0_GYRO_SENS_250_DEN },
+  { MPU60X0_GYRO_SENS_500_NUM, MPU60X0_GYRO_SENS_500_DEN },
+  { MPU60X0_GYRO_SENS_1000_NUM, MPU60X0_GYRO_SENS_1000_DEN },
+  { MPU60X0_GYRO_SENS_2000_NUM, MPU60X0_GYRO_SENS_2000_DEN }
+};
+
+const float MPU60X0_ACCEL_SENS[4] = {
+  MPU60X0_ACCEL_SENS_2G,
+  MPU60X0_ACCEL_SENS_4G,
+  MPU60X0_ACCEL_SENS_8G,
+  MPU60X0_ACCEL_SENS_16G
+};
+
+const int32_t MPU60X0_ACCEL_SENS_FRAC[4][2] = {
+  { MPU60X0_ACCEL_SENS_2G_NUM, MPU60X0_ACCEL_SENS_2G_DEN },
+  { MPU60X0_ACCEL_SENS_4G_NUM, MPU60X0_ACCEL_SENS_4G_DEN },
+  { MPU60X0_ACCEL_SENS_8G_NUM, MPU60X0_ACCEL_SENS_8G_DEN },
+  { MPU60X0_ACCEL_SENS_16G_NUM, MPU60X0_ACCEL_SENS_16G_DEN }
+};
 
 void mpu60x0_set_default_config(struct Mpu60x0Config *c)
 {
@@ -36,7 +64,7 @@ void mpu60x0_set_default_config(struct Mpu60x0Config *c)
   c->dlpf_cfg = MPU60X0_DEFAULT_DLPF_CFG;
   c->gyro_range = MPU60X0_DEFAULT_FS_SEL;
   c->accel_range = MPU60X0_DEFAULT_AFS_SEL;
-  c->drdy_int_enable = FALSE;
+  c->drdy_int_enable = false;
 
   /* Number of bytes to read starting with MPU60X0_REG_INT_STATUS
    * By default read only gyro and accel data -> 15 bytes.
@@ -44,18 +72,19 @@ void mpu60x0_set_default_config(struct Mpu60x0Config *c)
    */
   c->nb_bytes = 15;
   c->nb_slaves = 0;
+  c->nb_slave_init = 0;
 
-  c->i2c_bypass = FALSE;
+  c->i2c_bypass = false;
 }
 
-void mpu60x0_send_config(Mpu60x0ConfigSet mpu_set, void* mpu, struct Mpu60x0Config* config)
+void mpu60x0_send_config(Mpu60x0ConfigSet mpu_set, void *mpu, struct Mpu60x0Config *config)
 {
   switch (config->init_status) {
     case MPU60X0_CONF_RESET:
       /* device reset, set register values to defaults */
-      mpu_set(mpu, MPU60X0_REG_PWR_MGMT_1, (1<<6));
+      mpu_set(mpu, MPU60X0_REG_PWR_MGMT_1, (1 << 6));
       config->init_status++;
-    break;
+      break;
     case MPU60X0_CONF_USER_RESET:
       /* trigger FIFO, I2C_MST and SIG_COND resets */
       mpu_set(mpu, MPU60X0_REG_USER_CTRL, ((1 << MPU60X0_FIFO_RESET) |
@@ -65,7 +94,7 @@ void mpu60x0_send_config(Mpu60x0ConfigSet mpu_set, void* mpu, struct Mpu60x0Conf
       break;
     case MPU60X0_CONF_PWR:
       /* switch to gyroX clock by default */
-      mpu_set(mpu, MPU60X0_REG_PWR_MGMT_1, ((config->clk_sel)|(0<<6)));
+      mpu_set(mpu, MPU60X0_REG_PWR_MGMT_1, ((config->clk_sel) | (0 << 6)));
       config->init_status++;
       break;
     case MPU60X0_CONF_SD:
@@ -80,31 +109,32 @@ void mpu60x0_send_config(Mpu60x0ConfigSet mpu_set, void* mpu, struct Mpu60x0Conf
       break;
     case MPU60X0_CONF_GYRO:
       /* configure gyro range */
-      mpu_set(mpu, MPU60X0_REG_GYRO_CONFIG, (config->gyro_range<<3));
+      mpu_set(mpu, MPU60X0_REG_GYRO_CONFIG, (config->gyro_range << 3));
       config->init_status++;
       break;
     case MPU60X0_CONF_ACCEL:
       /* configure accelerometer range */
-      mpu_set(mpu, MPU60X0_REG_ACCEL_CONFIG, (config->accel_range<<3));
+      mpu_set(mpu, MPU60X0_REG_ACCEL_CONFIG, (config->accel_range << 3));
       config->init_status++;
       break;
     case MPU60X0_CONF_I2C_SLAVES:
       /* if any, set MPU for I2C slaves and configure them*/
       if (config->nb_slaves > 0) {
         /* returns TRUE when all slaves are configured */
-        if (mpu60x0_configure_i2c_slaves(mpu_set, mpu))
+        if (mpu60x0_configure_i2c_slaves(mpu_set, mpu)) {
           config->init_status++;
-      }
-      else
+        }
+      } else {
         config->init_status++;
+      }
       break;
     case MPU60X0_CONF_INT_ENABLE:
       /* configure data ready interrupt */
-      mpu_set(mpu, MPU60X0_REG_INT_ENABLE, (config->drdy_int_enable<<0));
+      mpu_set(mpu, MPU60X0_REG_INT_ENABLE, (config->drdy_int_enable << 0));
       config->init_status++;
       break;
     case MPU60X0_CONF_DONE:
-      config->initialized = TRUE;
+      config->initialized = true;
       break;
     default:
       break;

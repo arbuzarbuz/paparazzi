@@ -67,7 +67,7 @@ let make_geo_deg = fun lat long ->
   { posn_long = norm_angle ((Deg>>Rad)long); posn_lat = ((Deg>>Rad)lat) }
 
 
-let deg_string_of_rad = fun r -> Printf.sprintf "%.6f" ((Rad>>Deg)r)
+let deg_string_of_rad = fun r -> Printf.sprintf "%.7f" ((Rad>>Deg)r)
 
 let decimal d m s = float d +. float m /. 60. +. s /. 3600.;;
 let dms = fun x ->
@@ -78,7 +78,7 @@ let dms = fun x ->
 
 
 let sprint_degree_of_radian x =
-  Printf.sprintf "%.6f" ((Rad>>Deg) x)
+  Printf.sprintf "%.7f" ((Rad>>Deg) x)
 
 let string_degrees_of_geographic sm =
   Printf.sprintf "%s\t%s"
@@ -270,7 +270,7 @@ let coeff_proj_mercator_inverse =
     [|0.;0.;0.; 17./.30720.;283./.430080.|];
     [|0.;0.;0.;0.;4397./.41287680.|]|];;
 
-let utm_of' = fun geo ->
+let utm_of' = fun ?zone geo ->
   let ellipsoid =  ellipsoid_of geo in
   let k0 = 0.9996
   and xs = 500000. in
@@ -282,8 +282,13 @@ let utm_of' = fun geo ->
     if not (valid_geo pos) then
       invalid_arg "Latlong.utm_of";
     let lambda_deg = truncate (floor ((Rad>>Deg)lambda)) in
-    let zone = (lambda_deg + 180) / 6 + 1 in
-    let lambda_c = (Deg>>Rad) (float (lambda_deg - ((lambda_deg mod 6)+6)mod 6 + 3)) in
+    let zone, lambda_c =
+      match zone with
+      | None ->
+          (lambda_deg + 180) / 6 + 1,
+          (Deg>>Rad) (float (lambda_deg - ((lambda_deg mod 6)+6)mod 6 + 3))
+      | Some z -> z, (Deg>>Rad) (float ((z - 1)*6 - 180 + 3))
+    in
     let ll = latitude_isometrique phi e
     and dl = lambda -. lambda_c in
     let phi' = asin (sin dl /. cosh ll) in
@@ -309,11 +314,11 @@ let utm_of' = fun geo ->
 
 
 (** Static evaluation for better performance (~50% for cputime) *)
-let utm_of =
-  let u_WGS84 = utm_of' WGS84
-  and u_NTF = utm_of' NTF
-  and u_ED50 = utm_of' ED50
-  and u_NAD27 = utm_of' NAD27 in
+let utm_of = fun ?zone ->
+  let u_WGS84 = utm_of' ?zone WGS84
+  and u_NTF = utm_of' ?zone NTF
+  and u_ED50 = utm_of' ?zone ED50
+  and u_NAD27 = utm_of' ?zone NAD27 in
   fun geo -> match geo with
       WGS84 -> u_WGS84
     | NTF -> u_NTF
@@ -469,9 +474,34 @@ let bearing = fun geo1 geo2 ->
   ((Rad>>Deg)(atan2 dx dy), sqrt(dx*.dx+.dy*.dy))
 
 
-let leap_seconds = 15 (* http://www.leapsecond.com/java/gpsclock.htm *)
+(** Offset between GPS and UTC times in seconds.
+ * Update when a new leap second is inserted and be careful about times in the
+ * past when this offset was different.
+ * Last leap second was inserted on June 30, 2012 at 23:59:60 UTC
+ * http://www.leapsecond.com/java/gpsclock.htm
+ *)
+let leap_seconds = 16
 
-let gps_epoch = 315964800. (* In seconds, in the unix reference *)
+(** leap seconds in GPS time.
+ * There have been 18 leap seconds so far, with the last one at
+ * Dec 31, 2016 at 23:59:60 UTC which equals 1167264017 in GPS seconds
+ * http://www.leapsecond.com/java/gpsclock.htm
+ * http://www.andrews.edu/~tzs/timeconv/timealgorithm.html
+ *)
+let leap_seconds_list = [46828800.; 78364801.; 109900802.; 173059203.; 252028804.; 315187205.; 346723206.; 393984007.; 425520008.; 457056009.; 504489610.; 551750411.; 599184012.; 820108813.; 914803214.; 1025136015.; 1119744016.; 1167264017.]
+
+(** Count number of leap seconds when converting gps to unix time *)
+let gps_count_leaps = fun gps_time ->
+  let rec loop = fun l s ->
+    match l with
+    | [] -> s
+    | x::xs -> if gps_time >= x then loop xs (s+1) else s
+  in
+  loop leap_seconds_list 0
+
+(** Unix timestamp of the GPS epoch 1980-01-06 00:00:00 UTC *)
+let gps_epoch = 315964800.
+
 
 let gps_tow_of_utc = fun ?wday hour min sec ->
   let wday =
@@ -492,9 +522,10 @@ let unix_time_of_tow = fun ?week tow ->
         and unix_now = Unix.gettimeofday () in
         unix_now +. float (tow - host_tow)
     | Some w ->
-      gps_epoch
-      +. float w *. 60. *. 60. *. 24. *. 7.
-      +. float (tow - leap_seconds)
+      let gps_seconds = gps_epoch
+        +. float w *. 60. *. 60. *. 24. *. 7.
+        +. float tow in
+      gps_seconds -. float (gps_count_leaps gps_seconds)
 
 
 
@@ -515,10 +546,12 @@ type coordinates_kind =
             let l = lambertIIe_of geo in
             Printf.sprintf "%d %d" l.lbt_x l.lbt_y
           | Bearing georef ->
-            let (dx, dy) = utm_sub (utm_of WGS84 geo) (utm_of WGS84 georef#pos) in
-            let d = sqrt (dx*.dx+.dy*.dy) in
-            let bearing = (int_of_float ((Rad>>Deg)(atan2 dx dy)) + 360) mod 360 in
-            Printf.sprintf "%4d %4.0f" bearing d
+            try
+              let (dx, dy) = utm_sub (utm_of WGS84 geo) (utm_of WGS84 georef#pos) in
+              let d = sqrt (dx*.dx+.dy*.dy) in
+              let bearing = (int_of_float ((Rad>>Deg)(atan2 dx dy)) + 360) mod 360 in
+              Printf.sprintf "%4d %4.0f" bearing d
+            with _ -> "Dist across diff utm zones unsupported"
 
 let geographic_of_coordinates = fun kind s ->
   match kind with
@@ -558,9 +591,10 @@ let ecef_of_geo = fun geo ->
     and cos_long = cos long in
 
     let chi = sqrt (1. -. e2*.sin_lat*.sin_lat) in
-    let x = (elps.a/.chi +.h)*.cos_lat*.cos_long
-    and y = (elps.a/.chi +.h)*.cos_lat*.sin long
-    and z = (elps.a*.(1.-.e2)/.chi +. h)*.sin_lat in
+    let a_chi = elps.a /. chi in
+    let x = (a_chi +.h)*.cos_lat*.cos_long
+    and y = (a_chi +.h)*.cos_lat*.sin long
+    and z = (a_chi*.(1.-.e2) +. h)*.sin_lat in
     [|x; y; z|]
 
 let geo_of_ecef = fun geo ->

@@ -1,59 +1,53 @@
 # Hey Emacs, this is a -*- makefile -*-
+#
+#   Copyright (C) 2009-2015 The Paparazzi Team
+#
+# This file is part of paparazzi.
+#
+# paparazzi is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# paparazzi is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with paparazzi; see the file COPYING.  If not, see
+# <http://www.gnu.org/licenses/>.
+#
 
 #
-# Copyright (C) 2012 - TU Delft Robotics Minor - Dino Hensen and Freek van Tienen
+# Makefile for ARM linux targets (e.g. OMAP, BBB, ARDrone)
 #
-# Minimal makefile for arm-linux-gnueabi or arm-none-linux-gnueabi toolchain.
-# Assuming installed in default location.
-
 
 #
-# try to pick up the compiler from the path
+# find compiler toolchain
+# if HARD_FLOAT is defined at this point it will try to find the hf toolchain
 #
-CC   = $(shell which arm-linux-gnueabi-gcc)
-LD   = $(shell which arm-linux-gnueabi-gcc)
-AR   = $(shell which arm-linux-gnueabi-ar)
-CP   = $(shell which arm-linux-gnueabi-objcopy)
-DMP  = $(shell which arm-linux-gnueabi-objdump)
-NM   = $(shell which arm-linux-gnueabi-nm)
-SIZE = $(shell which arm-linux-gnueabi-size)
-GDB  = $(shell which arm-linux-gnueabi-gdb)
-TOOLCHAIN_DIR=$(shell dirname `which arm-linux-gnueabi`)
-GCC_LIB_DIR=$(TOOLCHAIN_DIR)/../arm-linux-gnueabi/lib
+include $(PAPARAZZI_SRC)/conf/Makefile.arm-linux-toolchain
 
-# if the above toolchain is used add the include folder
-CFLAGS += -I/usr/arm-linux-gnueabi/include
 
-#
-# if not found in path, try the codesourcery toolchain in /usr/local/codesourcery
-#
-ifeq ($(CC),)
-TOOLCHAIN=$(shell find -L /usr/local/codesourcery -maxdepth 2 -type d -name arm-none-linux-gnueabi 2>/dev/null | head -n 1)
-ifneq ($(TOOLCHAIN),)
-TOOLCHAIN_DIR=$(shell dirname $(TOOLCHAIN))
-GCC_BIN_DIR=$(TOOLCHAIN_DIR)/bin
-GCC_LIB_DIR=$(TOOLCHAIN_DIR)/arm-none-linux-gnueabi/lib
+# Define some ARM specifc flags
 
-# Define programs and commands.
-GCC_BIN_PREFIX=$(GCC_BIN_DIR)/arm-none-linux-gnueabi
-CC   = $(GCC_BIN_PREFIX)-gcc
-LD   = $(GCC_BIN_PREFIX)-gcc
-AR   = $(GCC_BIN_PREFIX)-ar
-CP   = $(GCC_BIN_PREFIX)-objcopy
-DMP  = $(GCC_BIN_PREFIX)-objdump
-NM   = $(GCC_BIN_PREFIX)-nm
-SIZE = $(GCC_BIN_PREFIX)-size
-GDB  = $(GCC_BIN_PREFIX)-gdb
+ifdef HARD_FLOAT
+# e.g. for BBB or gumstix with armhf distribution
+FLOAT_ABI ?= -mfloat-abi=hard -mfpu=neon -ffast-math
 else
-# toolchain not found...
+FLOAT_ABI ?= -mfloat-abi=softfp -mfpu=vfp
 endif
-endif
 
-# checking if gcc has thumb2 instruction
-MULTILIB = $(shell if $(CC) --print-multi-lib | grep thumb2 > /dev/null ; then echo "yes"; else echo "no"; fi)
+ARCH_CFLAGS ?= -mtune=cortex-a8 -march=armv7-a
 
-# some general commands
-RM = rm
+# with armv7, unaligned data can still be read
+CFLAGS += -DPPRZLINK_UNALIGNED_ACCESS=1
 
+# add ARM specifc flags to CFLAGS, LDFLAGS
+CFLAGS += $(FLOAT_ABI) $(ARCH_CFLAGS)
+LDFLAGS += $(FLOAT_ABI)
+CXXFLAGS += $(FLOAT_ABI) $(ARCH_CFLAGS)
 
-include $(PAPARAZZI_SRC)/conf/Makefile.arm-common
+# include the common linux Makefile (common CFLAGS, actual targets)
+include $(PAPARAZZI_SRC)/conf/Makefile.linux

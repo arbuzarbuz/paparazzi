@@ -19,7 +19,11 @@
  * Boston, MA 02111-1307, USA.
  */
 
-/* Common tools for ABI middelware */
+/**
+ * @file subsystems/abi_common.h
+ *
+ * Common tools for ABI middelware.
+ */
 
 #ifndef ABI_COMMON_H
 #define ABI_COMMON_H
@@ -28,32 +32,40 @@
 #include "std.h"
 #include "math/pprz_algebra_int.h"
 #include "math/pprz_algebra_float.h"
+#include "subsystems/gps.h"
 /* Include here headers with structure definition you may want to use with ABI
  * Ex: '#include "subsystems/gps.h"' in order to use the GpsState structure
  */
 
+#include "subsystems/abi_sender_ids.h"
 
 /* Some magic to avoid to compile C code, only headers */
 #ifdef ABI_C
-#define EXTERN
+#define ABI_EXTERN
 #else
-#define EXTERN extern
+#define ABI_EXTERN extern
 #endif
 
 /** Generic callback definition */
 typedef void (*abi_callback)(void);
 
 /** Broadcast address.
- * When passing broadcast address has a sender id,
- * messages from all sender are received
+ * When binding to an ABI message with broadcast address as a sender id,
+ * messages from all senders are received.
  */
-#define ABI_BROADCAST 0
+#define ABI_BROADCAST 255
+
+/** Reserved ABI ID to disable callback.
+ * When binding to an ABI message with 0 as sender id,
+ * the callback is disabled.
+ */
+#define ABI_DISABLE 0
 
 /** Event structure to store callbacks in a linked list */
 struct abi_struct {
   uint8_t id;
   abi_callback cb;
-  struct abi_struct * next;
+  struct abi_struct *next;
 };
 typedef struct abi_struct abi_event;
 

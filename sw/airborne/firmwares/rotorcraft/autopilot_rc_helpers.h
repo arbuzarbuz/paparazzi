@@ -52,30 +52,62 @@
   (radio_control.values[RADIO_ROLL] < AUTOPILOT_STICK_CENTER_THRESHOLD && \
    radio_control.values[RADIO_ROLL] > -AUTOPILOT_STICK_CENTER_THRESHOLD)
 
-static inline bool_t rc_attitude_sticks_centered(void) {
+/** RC mode switch position helper
+ *  switch positions threshold are evenly spaced
+ *
+ *  @param[in] chan RC mode channel number
+ *  @param[in] pos switch position to be tested
+ *  @param[in] max maximum number of position of the switch
+ *  @return true if current position is the same as requested (and RC status is OK)
+ */
+static inline bool rc_mode_switch(uint8_t chan, uint8_t pos, uint8_t max)
+{
+  if (radio_control.status != RC_OK) return false;
+  if (pos >= max) return false;
+  int32_t v = (int32_t)radio_control.values[chan] - MIN_PPRZ;
+  // round final value
+  int32_t p = (((((int32_t)max - 1) * 10 * v) / (MAX_PPRZ - MIN_PPRZ)) + 5) / 10;
+  Bound(p, 0, max - 1); // just in case
+  return pos == (uint8_t)p;
+}
+
+/** Convenience macro for 3way switch
+ */
+#ifdef RADIO_MODE
+#define RCMode0() rc_mode_switch(RADIO_MODE, 0, 3)
+#define RCMode1() rc_mode_switch(RADIO_MODE, 1, 3)
+#define RCMode2() rc_mode_switch(RADIO_MODE, 2, 3)
+#endif
+
+static inline bool rc_attitude_sticks_centered(void)
+{
   return ROLL_STICK_CENTERED() && PITCH_STICK_CENTERED() && YAW_STICK_CENTERED();
 }
 
 #ifdef RADIO_KILL_SWITCH
-static inline bool_t kill_switch_is_on(void) {
-  if (radio_control.values[RADIO_KILL_SWITCH] < 0)
-    return TRUE;
-  else
-    return FALSE;
+static inline bool kill_switch_is_on(void)
+{
+  if (radio_control.values[RADIO_KILL_SWITCH] < 0) {
+    return true;
+  } else {
+    return false;
+  }
 }
 #else
-static inline bool_t kill_switch_is_on(void) {
-  return FALSE;
+static inline bool kill_switch_is_on(void)
+{
+  return false;
 }
 #endif
 
 static inline uint8_t percent_from_rc(int channel)
 {
   int per = (MAX_PPRZ + (int32_t)radio_control.values[channel]) * 50 / MAX_PPRZ;
-  if (per < 0)
+  if (per < 0) {
     per = 0;
-  else if (per > 100)
+  } else if (per > 100) {
     per = 100;
+  }
   return per;
 }
 

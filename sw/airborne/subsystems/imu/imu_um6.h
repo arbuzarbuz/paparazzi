@@ -19,17 +19,17 @@
  * the Free Software Foundation, 59 Temple Place - Suite 330,
  * Boston, MA 02111-1307, USA.
  */
- /**
- * @file imu_um6.h
- *
- * Driver for CH Robotics UM6 IMU/AHRS subsystem
- *
- * Takes care of configuration of the IMU, communication and parsing
- * the received packets. See UM6 datasheet for configuration options.
- * Should be used with @ahrs_extern_euler AHRS subsystem.
- *
- * @author Michal Podhradsky <michal.podhradsky@aggiemail.usu.edu>
- */
+/**
+* @file imu_um6.h
+*
+* Driver for CH Robotics UM6 IMU/AHRS subsystem
+*
+* Takes care of configuration of the IMU, communication and parsing
+* the received packets. See UM6 datasheet for configuration options.
+* Should be used with ahrs_extern_euler AHRS subsystem.
+*
+* @author Michal Podhradsky <michal.podhradsky@aggiemail.usu.edu>
+*/
 #ifndef IMU_UM6_H
 #define IMU_UM6_H
 
@@ -37,28 +37,6 @@
 #include "subsystems/imu.h"
 #include "mcu_periph/uart.h"
 #include "subsystems/ahrs.h"
-#include "subsystems/ins.h"
-
-#define __UM6Link(dev, _x) dev##_x
-#define _UM6Link(dev, _x)  __UM6Link(dev, _x)
-#define UM6Link(_x) _UM6Link(UM6_LINK, _x)
-
-#define UM6Buffer() UM6Link(ChAvailable())
-
-#ifdef ImuScaleGyro
-#undef ImuScaleGyro
-#endif
-#define ImuScaleGyro(_imu) {}
-
-#ifdef ImuScaleAccel
-#undef ImuScaleAccel
-#endif
-#define ImuScaleAccel(_imu) {}
-
-#ifdef ImuScaleMag
-#undef ImuScaleMag
-#endif
-#define ImuScaleMag(_imu) {}
 
 #define IMU_UM6_BUFFER_LENGTH 32
 #define IMU_UM6_DATA_OFFSET 5
@@ -81,6 +59,7 @@
 
 extern void UM6_packet_read_message(void);
 extern void UM6_packet_parse(uint8_t c);
+extern void imu_um6_publish(void);
 
 extern struct UM6Packet UM6_packet;
 
@@ -98,7 +77,7 @@ extern struct FloatEulers UM6_eulers;
 extern struct FloatQuat UM6_quat;
 
 struct UM6Packet {
-  bool_t  msg_available;
+  bool  msg_available;
   uint32_t chksm_error;
   uint32_t hdr_error;
   uint8_t msg_buf[IMU_UM6_BUFFER_LENGTH];
@@ -107,12 +86,12 @@ struct UM6Packet {
 };
 
 enum UM6PacketStatus {
-    UM6PacketWaiting,
-    UM6PacketReadingS,
-    UM6PacketReadingN,
-    UM6PacketReadingPT,
-    UM6PacketReadingAddr,
-    UM6PacketReadingData
+  UM6PacketWaiting,
+  UM6PacketReadingS,
+  UM6PacketReadingN,
+  UM6PacketReadingPT,
+  UM6PacketReadingAddr,
+  UM6PacketReadingData
 };
 
 enum UM6Status {
@@ -120,26 +99,21 @@ enum UM6Status {
   UM6Running
 };
 
-#define imu_um6_event(_callback1, _callback2, _callback3) {				\
-    if (UM6Buffer()) {							\
-      ReadUM6Buffer();							\
-    }									\
-    if (UM6_packet.msg_available) {					\
-      UM6_packet.msg_available = FALSE;					\
-      UM6_packet_read_message();					\
-      _callback1();			\
-      _callback2();			\
-      _callback3();     \
-    } \
-}
+extern void imu_um6_init(void);
+extern void imu_um6_periodic(void);
 
-#define ReadUM6Buffer() {						\
-    while (UM6Link(ChAvailable())&&!UM6_packet.msg_available)		\
-      UM6_packet_parse(UM6Link(Getch()));				\
+static inline void imu_um6_event(void)
+{
+  if (uart_char_available(&(UM6_LINK))) {
+    while (uart_char_available(&(UM6_LINK)) && !UM6_packet.msg_available) {
+      UM6_packet_parse(uart_getch(&(UM6_LINK)));
+    }
+    if (UM6_packet.msg_available) {
+      UM6_packet.msg_available = false;
+      UM6_packet_read_message();
+      imu_um6_publish();
+    }
   }
-
-#define ImuEvent(_gyro_handler, _accel_handler, _mag_handler) { \
-  imu_um6_event(_gyro_handler, _accel_handler, _mag_handler); \
 }
 
 #endif /* IMU_UM6_H*/

@@ -39,13 +39,12 @@
 
 #include BOARD_CONFIG
 
-void uart_periph_set_baudrate(struct uart_periph* p, uint32_t baud) {
+void uart_periph_set_baudrate(struct uart_periph *p, uint32_t baud)
+{
+  p->baudrate = baud;
 
-  /* Configure USART */
+  /* Configure USART baudrate */
   usart_set_baudrate((uint32_t)p->reg_addr, baud);
-  usart_set_databits((uint32_t)p->reg_addr, 8);
-  usart_set_stopbits((uint32_t)p->reg_addr, USART_STOPBITS_1);
-  usart_set_parity((uint32_t)p->reg_addr, USART_PARITY_NONE);
 
   /* Disable Idle Line interrupt */
   USART_CR1((uint32_t)p->reg_addr) &= ~USART_CR1_IDLEIE;
@@ -61,30 +60,63 @@ void uart_periph_set_baudrate(struct uart_periph* p, uint32_t baud) {
 
 }
 
-void uart_periph_set_mode(struct uart_periph* p, bool_t tx_enabled, bool_t rx_enabled, bool_t hw_flow_control) {
+void uart_periph_set_bits_stop_parity(struct uart_periph *p, uint8_t bits, uint8_t stop, uint8_t parity)
+{
+  /* Configure USART parity and data bits */
+  if (parity == UPARITY_EVEN) {
+    usart_set_parity((uint32_t)p->reg_addr, USART_PARITY_EVEN);
+    if (bits == UBITS_7) {
+      usart_set_databits((uint32_t)p->reg_addr, 8);
+    } else { // 8 data bits by default
+      usart_set_databits((uint32_t)p->reg_addr, 9);
+    }
+  } else if (parity == UPARITY_ODD) {
+    usart_set_parity((uint32_t)p->reg_addr, USART_PARITY_ODD);
+    if (bits == UBITS_7) {
+      usart_set_databits((uint32_t)p->reg_addr, 8);
+    } else { // 8 data bits by default
+      usart_set_databits((uint32_t)p->reg_addr, 9);
+    }
+  } else { // 8 data bist, NO_PARITY by default
+    usart_set_parity((uint32_t)p->reg_addr, USART_PARITY_NONE);
+    usart_set_databits((uint32_t)p->reg_addr, 8); // is 7bits without parity possible ?
+  }
+  /* Configure USART stop bits */
+  if (stop == USTOP_2) {
+    usart_set_stopbits((uint32_t)p->reg_addr, USART_STOPBITS_2);
+  } else { // 1 stop bit by default
+    usart_set_stopbits((uint32_t)p->reg_addr, USART_STOPBITS_1);
+  }
+}
+
+void uart_periph_set_mode(struct uart_periph *p, bool tx_enabled, bool rx_enabled, bool hw_flow_control)
+{
   uint32_t mode = 0;
-  if (tx_enabled)
+  if (tx_enabled) {
     mode |= USART_MODE_TX;
-  if (rx_enabled)
+  }
+  if (rx_enabled) {
     mode |= USART_MODE_RX;
+  }
 
   /* set mode to Tx, Rx or TxRx */
   usart_set_mode((uint32_t)p->reg_addr, mode);
 
   if (hw_flow_control) {
     usart_set_flow_control((uint32_t)p->reg_addr, USART_FLOWCONTROL_RTS_CTS);
-  }
-  else {
+  } else {
     usart_set_flow_control((uint32_t)p->reg_addr, USART_FLOWCONTROL_NONE);
   }
 }
 
-void uart_transmit(struct uart_periph* p, uint8_t data ) {
+void uart_put_byte(struct uart_periph *p, long fd __attribute__((unused)), uint8_t data)
+{
 
   uint16_t temp = (p->tx_insert_idx + 1) % UART_TX_BUFFER_SIZE;
 
-  if (temp == p->tx_extract_idx)
-    return;                          // no room
+  if (temp == p->tx_extract_idx) {
+    return;  // no room
+  }
 
   USART_CR1((uint32_t)p->reg_addr) &= ~USART_CR1_TXEIE; // Disable TX interrupt
 
@@ -92,9 +124,8 @@ void uart_transmit(struct uart_periph* p, uint8_t data ) {
   if (p->tx_running) { // yes, add to queue
     p->tx_buf[p->tx_insert_idx] = data;
     p->tx_insert_idx = temp;
-  }
-  else { // no, set running flag and write to output register
-    p->tx_running = TRUE;
+  } else { // no, set running flag and write to output register
+    p->tx_running = true;
     usart_send((uint32_t)p->reg_addr, data);
   }
 
@@ -102,18 +133,18 @@ void uart_transmit(struct uart_periph* p, uint8_t data ) {
 
 }
 
-static inline void usart_isr(struct uart_periph* p) {
+static inline void usart_isr(struct uart_periph *p)
+{
 
   if (((USART_CR1((uint32_t)p->reg_addr) & USART_CR1_TXEIE) != 0) &&
       ((USART_SR((uint32_t)p->reg_addr) & USART_SR_TXE) != 0)) {
     // check if more data to send
     if (p->tx_insert_idx != p->tx_extract_idx) {
-      usart_send((uint32_t)p->reg_addr,p->tx_buf[p->tx_extract_idx]);
+      usart_send((uint32_t)p->reg_addr, p->tx_buf[p->tx_extract_idx]);
       p->tx_extract_idx++;
       p->tx_extract_idx %= UART_TX_BUFFER_SIZE;
-    }
-    else {
-      p->tx_running = FALSE;   // clear running flag
+    } else {
+      p->tx_running = false;   // clear running flag
       USART_CR1((uint32_t)p->reg_addr) &= ~USART_CR1_TXEIE; // Disable TX interrupt
     }
   }
@@ -126,10 +157,10 @@ static inline void usart_isr(struct uart_periph* p) {
     uint16_t temp = (p->rx_insert_idx + 1) % UART_RX_BUFFER_SIZE;;
     p->rx_buf[p->rx_insert_idx] = usart_recv((uint32_t)p->reg_addr);
     // check for more room in queue
-    if (temp != p->rx_extract_idx)
-      p->rx_insert_idx = temp; // update insert index
-  }
-  else {
+    if (temp != p->rx_extract_idx) {
+      p->rx_insert_idx = temp;  // update insert index
+    }
+  } else {
     /* ORE, NE or FE error - read USART_DR reg and log the error */
     if (((USART_CR1((uint32_t)p->reg_addr) & USART_CR1_RXNEIE) != 0) &&
         ((USART_SR((uint32_t)p->reg_addr) & USART_SR_ORE) != 0)) {
@@ -149,7 +180,8 @@ static inline void usart_isr(struct uart_periph* p) {
   }
 }
 
-static inline void usart_enable_irq(uint8_t IRQn) {
+static inline void usart_enable_irq(uint8_t IRQn)
+{
   /* Note:
    * In libstm32 times the priority of this interrupt was set to
    * preemption priority 2 and sub priority 1
@@ -159,7 +191,7 @@ static inline void usart_enable_irq(uint8_t IRQn) {
 }
 
 
-#ifdef USE_UART1
+#if USE_UART1
 
 /* by default enable UART Tx and Rx */
 #ifndef USE_UART1_TX
@@ -173,13 +205,26 @@ static inline void usart_enable_irq(uint8_t IRQn) {
 #define UART1_HW_FLOW_CONTROL FALSE
 #endif
 
-void uart1_init( void ) {
+#ifndef UART1_BITS
+#define UART1_BITS UBITS_8
+#endif
+
+#ifndef UART1_STOP
+#define UART1_STOP USTOP_1
+#endif
+
+#ifndef UART1_PARITY
+#define UART1_PARITY UPARITY_NO
+#endif
+
+void uart1_init(void)
+{
 
   uart_periph_init(&uart1);
   uart1.reg_addr = (void *)USART1;
 
   /* init RCC and GPIOs */
-  rcc_peripheral_enable_clock(&RCC_APB2ENR, RCC_APB2ENR_USART1EN);
+  rcc_periph_clock_enable(RCC_USART1);
 
 #if USE_UART1_TX
   gpio_setup_pin_af(UART1_GPIO_PORT_TX, UART1_GPIO_TX, UART1_GPIO_AF, TRUE);
@@ -201,7 +246,8 @@ void uart1_init( void ) {
   /* Configure USART1, enable hardware flow control*/
   uart_periph_set_mode(&uart1, USE_UART1_TX, USE_UART1_RX, UART1_HW_FLOW_CONTROL);
 
-  /* Set USART1 baudrate and enable interrupt */
+  /* Set USART1 parameters and enable interrupt */
+  uart_periph_set_bits_stop_parity(&uart1, UART1_BITS, UART1_STOP, UART1_PARITY);
   uart_periph_set_baudrate(&uart1, UART1_BAUD);
 }
 
@@ -210,7 +256,7 @@ void usart1_isr(void) { usart_isr(&uart1); }
 #endif /* USE_UART1 */
 
 
-#ifdef USE_UART2
+#if USE_UART2
 
 /* by default enable UART Tx and Rx */
 #ifndef USE_UART2_TX
@@ -224,13 +270,26 @@ void usart1_isr(void) { usart_isr(&uart1); }
 #define UART2_HW_FLOW_CONTROL FALSE
 #endif
 
-void uart2_init( void ) {
+#ifndef UART2_BITS
+#define UART2_BITS UBITS_8
+#endif
+
+#ifndef UART2_STOP
+#define UART2_STOP USTOP_1
+#endif
+
+#ifndef UART2_PARITY
+#define UART2_PARITY UPARITY_NO
+#endif
+
+void uart2_init(void)
+{
 
   uart_periph_init(&uart2);
   uart2.reg_addr = (void *)USART2;
 
   /* init RCC and GPIOs */
-  rcc_peripheral_enable_clock(&RCC_APB1ENR, RCC_APB1ENR_USART2EN);
+  rcc_periph_clock_enable(RCC_USART2);
 
 #if USE_UART2_TX
   gpio_setup_pin_af(UART2_GPIO_PORT_TX, UART2_GPIO_TX, UART2_GPIO_AF, TRUE);
@@ -253,6 +312,7 @@ void uart2_init( void ) {
   uart_periph_set_mode(&uart2, USE_UART2_TX, USE_UART2_RX, UART2_HW_FLOW_CONTROL);
 
   /* Configure USART */
+  uart_periph_set_bits_stop_parity(&uart2, UART2_BITS, UART2_STOP, UART2_PARITY);
   uart_periph_set_baudrate(&uart2, UART2_BAUD);
 }
 
@@ -261,7 +321,7 @@ void usart2_isr(void) { usart_isr(&uart2); }
 #endif /* USE_UART2 */
 
 
-#ifdef USE_UART3
+#if USE_UART3
 
 /* by default enable UART Tx and Rx */
 #ifndef USE_UART3_TX
@@ -275,13 +335,26 @@ void usart2_isr(void) { usart_isr(&uart2); }
 #define UART3_HW_FLOW_CONTROL FALSE
 #endif
 
-void uart3_init( void ) {
+#ifndef UART3_BITS
+#define UART3_BITS UBITS_8
+#endif
+
+#ifndef UART3_STOP
+#define UART3_STOP USTOP_1
+#endif
+
+#ifndef UART3_PARITY
+#define UART3_PARITY UPARITY_NO
+#endif
+
+void uart3_init(void)
+{
 
   uart_periph_init(&uart3);
   uart3.reg_addr = (void *)USART3;
 
   /* init RCC */
-  rcc_peripheral_enable_clock(&RCC_APB1ENR, RCC_APB1ENR_USART3EN);
+  rcc_periph_clock_enable(RCC_USART3);
 
 #if USE_UART3_TX
   gpio_setup_pin_af(UART3_GPIO_PORT_TX, UART3_GPIO_TX, UART3_GPIO_AF, TRUE);
@@ -304,6 +377,7 @@ void uart3_init( void ) {
   uart_periph_set_mode(&uart3, USE_UART3_TX, USE_UART3_RX, UART3_HW_FLOW_CONTROL);
 
   /* Configure USART */
+  uart_periph_set_bits_stop_parity(&uart3, UART3_BITS, UART3_STOP, UART3_PARITY);
   uart_periph_set_baudrate(&uart3, UART3_BAUD);
 }
 
@@ -312,7 +386,7 @@ void usart3_isr(void) { usart_isr(&uart3); }
 #endif /* USE_UART3 */
 
 
-#if defined USE_UART4 && defined STM32F4
+#if USE_UART4
 
 /* by default enable UART Tx and Rx */
 #ifndef USE_UART4_TX
@@ -322,13 +396,26 @@ void usart3_isr(void) { usart_isr(&uart3); }
 #define USE_UART4_RX TRUE
 #endif
 
-void uart4_init( void ) {
+#ifndef UART4_BITS
+#define UART4_BITS UBITS_8
+#endif
+
+#ifndef UART4_STOP
+#define UART4_STOP USTOP_1
+#endif
+
+#ifndef UART4_PARITY
+#define UART4_PARITY UPARITY_NO
+#endif
+
+void uart4_init(void)
+{
 
   uart_periph_init(&uart4);
   uart4.reg_addr = (void *)UART4;
 
   /* init RCC and GPIOs */
-  rcc_peripheral_enable_clock(&RCC_APB1ENR, RCC_APB1ENR_UART4EN);
+  rcc_periph_clock_enable(RCC_UART4);
 
 #if USE_UART4_TX
   gpio_setup_pin_af(UART4_GPIO_PORT_TX, UART4_GPIO_TX, UART4_GPIO_AF, TRUE);
@@ -342,6 +429,7 @@ void uart4_init( void ) {
 
   /* Configure USART */
   uart_periph_set_mode(&uart4, USE_UART4_TX, USE_UART4_RX, FALSE);
+  uart_periph_set_bits_stop_parity(&uart4, UART4_BITS, UART4_STOP, UART4_PARITY);
   uart_periph_set_baudrate(&uart4, UART4_BAUD);
 }
 
@@ -350,7 +438,7 @@ void uart4_isr(void) { usart_isr(&uart4); }
 #endif /* USE_UART4 */
 
 
-#ifdef USE_UART5
+#if USE_UART5
 
 /* by default enable UART Tx and Rx */
 #ifndef USE_UART5_TX
@@ -360,13 +448,26 @@ void uart4_isr(void) { usart_isr(&uart4); }
 #define USE_UART5_RX TRUE
 #endif
 
-void uart5_init( void ) {
+#ifndef UART5_BITS
+#define UART5_BITS UBITS_8
+#endif
+
+#ifndef UART5_STOP
+#define UART5_STOP USTOP_1
+#endif
+
+#ifndef UART5_PARITY
+#define UART5_PARITY UPARITY_NO
+#endif
+
+void uart5_init(void)
+{
 
   uart_periph_init(&uart5);
   uart5.reg_addr = (void *)UART5;
 
   /* init RCC and GPIOs */
-  rcc_peripheral_enable_clock(&RCC_APB1ENR, RCC_APB1ENR_UART5EN);
+  rcc_periph_clock_enable(RCC_UART5);
 
 #if USE_UART5_TX
   gpio_setup_pin_af(UART5_GPIO_PORT_TX, UART5_GPIO_TX, UART5_GPIO_AF, TRUE);
@@ -380,6 +481,7 @@ void uart5_init( void ) {
 
   /* Configure USART */
   uart_periph_set_mode(&uart5, USE_UART5_TX, USE_UART5_RX, FALSE);
+  uart_periph_set_bits_stop_parity(&uart5, UART5_BITS, UART5_STOP, UART5_PARITY);
   uart_periph_set_baudrate(&uart5, UART5_BAUD);
 }
 
@@ -388,7 +490,7 @@ void uart5_isr(void) { usart_isr(&uart5); }
 #endif /* USE_UART5 */
 
 
-#if defined USE_UART6 && defined STM32F4
+#if USE_UART6 && defined STM32F4
 
 /* by default enable UART Tx and Rx */
 #ifndef USE_UART6_TX
@@ -402,13 +504,26 @@ void uart5_isr(void) { usart_isr(&uart5); }
 #define UART6_HW_FLOW_CONTROL FALSE
 #endif
 
-void uart6_init( void ) {
+#ifndef UART6_BITS
+#define UART6_BITS UBITS_8
+#endif
+
+#ifndef UART6_STOP
+#define UART6_STOP USTOP_1
+#endif
+
+#ifndef UART6_PARITY
+#define UART6_PARITY UPARITY_NO
+#endif
+
+void uart6_init(void)
+{
 
   uart_periph_init(&uart6);
   uart6.reg_addr = (void *)USART6;
 
   /* enable uart clock */
-  rcc_peripheral_enable_clock(&RCC_APB2ENR, RCC_APB2ENR_USART6EN);
+  rcc_periph_clock_enable(RCC_USART6);
 
   /* init RCC and GPIOs */
 #if USE_UART6_TX
@@ -430,10 +545,114 @@ void uart6_init( void ) {
 
   /* Configure USART Tx,Rx and hardware flow control*/
   uart_periph_set_mode(&uart6, USE_UART6_TX, USE_UART6_RX, UART6_HW_FLOW_CONTROL);
-
+  uart_periph_set_bits_stop_parity(&uart6, UART6_BITS, UART6_STOP, UART6_PARITY);
   uart_periph_set_baudrate(&uart6, UART6_BAUD);
 }
 
 void usart6_isr(void) { usart_isr(&uart6); }
 
 #endif /* USE_UART6 */
+
+
+#if USE_UART7
+
+/* by default enable UART Tx and Rx */
+#ifndef USE_UART7_TX
+#define USE_UART7_TX TRUE
+#endif
+#ifndef USE_UART7_RX
+#define USE_UART7_RX TRUE
+#endif
+
+#ifndef UART7_BITS
+#define UART7_BITS UBITS_8
+#endif
+
+#ifndef UART7_STOP
+#define UART7_STOP USTOP_1
+#endif
+
+#ifndef UART7_PARITY
+#define UART7_PARITY UPARITY_NO
+#endif
+
+void uart7_init(void)
+{
+
+  uart_periph_init(&uart7);
+  uart7.reg_addr = (void *)UART7;
+
+  /* init RCC and GPIOs */
+  rcc_periph_clock_enable(RCC_UART7);
+
+#if USE_UART7_TX
+  gpio_setup_pin_af(UART7_GPIO_PORT_TX, UART7_GPIO_TX, UART7_GPIO_AF, TRUE);
+#endif
+#if USE_UART7_RX
+  gpio_setup_pin_af(UART7_GPIO_PORT_RX, UART7_GPIO_RX, UART7_GPIO_AF, FALSE);
+#endif
+
+  /* Enable USART interrupts in the interrupt controller */
+  usart_enable_irq(NVIC_UART7_IRQ);
+
+  /* Configure USART */
+  uart_periph_set_mode(&uart7, USE_UART7_TX, USE_UART7_RX, FALSE);
+  uart_periph_set_bits_stop_parity(&uart7, UART7_BITS, UART7_STOP, UART7_PARITY);
+  uart_periph_set_baudrate(&uart7, UART7_BAUD);
+}
+
+void uart7_isr(void) { usart_isr(&uart7); }
+
+#endif /* USE_UART7 */
+
+
+#if USE_UART8
+
+/* by default enable UART Tx and Rx */
+#ifndef USE_UART8_TX
+#define USE_UART8_TX TRUE
+#endif
+#ifndef USE_UART8_RX
+#define USE_UART8_RX TRUE
+#endif
+
+#ifndef UART8_BITS
+#define UART8_BITS UBITS_8
+#endif
+
+#ifndef UART8_STOP
+#define UART8_STOP USTOP_1
+#endif
+
+#ifndef UART8_PARITY
+#define UART8_PARITY UPARITY_NO
+#endif
+
+void uart8_init(void)
+{
+
+  uart_periph_init(&uart8);
+  uart8.reg_addr = (void *)UART8;
+
+  /* init RCC and GPIOs */
+  rcc_periph_clock_enable(RCC_UART8);
+
+#if USE_UART8_TX
+  gpio_setup_pin_af(UART8_GPIO_PORT_TX, UART8_GPIO_TX, UART8_GPIO_AF, TRUE);
+#endif
+#if USE_UART8_RX
+  gpio_setup_pin_af(UART8_GPIO_PORT_RX, UART8_GPIO_RX, UART8_GPIO_AF, FALSE);
+#endif
+
+  /* Enable USART interrupts in the interrupt controller */
+  usart_enable_irq(NVIC_UART8_IRQ);
+
+  /* Configure USART */
+  uart_periph_set_mode(&uart8, USE_UART8_TX, USE_UART8_RX, FALSE);
+  uart_periph_set_bits_stop_parity(&uart8, UART8_BITS, UART8_STOP, UART8_PARITY);
+  uart_periph_set_baudrate(&uart8, UART8_BAUD);
+}
+
+void uart8_isr(void) { usart_isr(&uart8); }
+
+#endif /* USE_UART8 */

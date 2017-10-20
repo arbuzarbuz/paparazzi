@@ -27,7 +27,8 @@
 #include "LPC21xx.h"
 #include BOARD_CONFIG
 
-void TRIG_ISR() {
+void TRIG_ISR()
+{
   static uint32_t last;
   uint32_t delta_t0_temp;
   trigger_t0 = TRIGGER_CR;
@@ -35,21 +36,22 @@ void TRIG_ISR() {
   if (msec_of_cpu_ticks(delta_t0_temp) > 10) {
     trigger_delta_t0 = delta_t0_temp;
     last = trigger_t0;
-    trigger_ext_valid = TRUE;
+    trigger_ext_valid = true;
   }
 }
 
-void trigger_ext_init ( void ) {
+void trigger_ext_init(void)
+{
   /* select pin for capture */
   TRIG_EXT_PINSEL |= TRIG_EXT_PINSEL_VAL << TRIG_EXT_PINSEL_BIT;
   /* enable capture 0.2 on falling or rising edge + trigger interrupt */
 #if defined TRIG_EXT_PULSE_TYPE && TRIG_EXT_PULSE_TYPE == TRIG_EXT_PULSE_TYPE_RISING
-  T0CCR = TRIGGER_CRR | TRIGGER_CRI;
+  T0CCR |= TRIGGER_CRR | TRIGGER_CRI;
 #elif defined TRIG_EXT_PULSE_TYPE && TRIG_EXT_PULSE_TYPE == TRIG_EXT_PULSE_TYPE_FALLING
-  T0CCR = TRIGGER_CRF | TRIGGER_CRI;
+  T0CCR |= TRIGGER_CRF | TRIGGER_CRI;
 #else
 #error "trig_ext_hw.h: Unknown PULSE_TYPE"
 #endif
-  trigger_ext_valid = FALSE;
+  trigger_ext_valid = false;
 }
 

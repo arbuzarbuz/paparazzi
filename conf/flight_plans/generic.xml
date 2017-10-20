@@ -10,12 +10,12 @@
   </waypoints>
   <blocks>
 	  <block name="Wait GPS">
-		  <set value="1" var="kill_throttle"/>
+		  <set value="1" var="autopilot.kill_throttle"/>
 		  <while cond="!GpsFixValid()"/>
 	  </block>
 	  <block name="Geo init">
 		  <while cond="LessThan(NavBlockTime(), 10)"/>
-		  <call fun="NavSetGroundReferenceHere()"/>
+		  <call_once fun="NavSetGroundReferenceHere()"/>
     </block>
     <block name="circlehome">
       <circle radius="75" wp="HOME"/>
@@ -24,7 +24,7 @@
       <circle radius="-75" wp="HOME"/>
     </block>
     <block name="climb 75">
-      <circle radius="50+(GetPosAlt()-ground_alt)/2" wp="1" throttle="0.75" pitch="15" vmode="throttle" until="10>PowerVoltage()"/>
+      <circle radius="50+(GetPosAlt()-GetAltRef())/2" wp="1" throttle="0.75" pitch="15" vmode="throttle" until="10>PowerVoltage()"/>
     </block>
     <block name="stack 1">
       <circle radius="GetPosAlt()/2" wp="1"/>

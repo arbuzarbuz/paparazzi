@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2004-2011 The Paparazzi Team
+ *               2014 Freek van Tienen <freek.v.tienen@gmail.com>
  *
  * This file is part of paparazzi.
  *
@@ -25,72 +26,63 @@
  *
 */
 
-
 #ifndef GPS_NMEA_H
 #define GPS_NMEA_H
 
 #include "mcu_periph/uart.h"
+#include "subsystems/gps.h"
 
-#define GPS_NB_CHANNELS 16
-
-#ifdef DEBUG_NMEA
-#define NMEA_PRINT(...) {  UsbSPrintString( __VA_ARGS__);};
-#else
-#define NMEA_PRINT(...) {};
-#endif
+#define GPS_NMEA_NB_CHANNELS 12
 
 #define NMEA_MAXLEN 255
 
+#ifndef PRIMARY_GPS
+#define PRIMARY_GPS GPS_NMEA
+#endif
+
 struct GpsNmea {
-  bool_t msg_available;
-  bool_t pos_available;
-  uint8_t gps_nb_ovrn;        // number if incomplete nmea-messages
+  bool msg_available;       ///< flag set to TRUE if a new msg/sentence is available to be parsed
+  bool is_configured;       ///< flag set to TRUE if configuration is finished
+  bool have_gsv;            ///< flag set to TRUE if GPGSV message received
+  uint8_t gps_nb_ovrn;        ///< number if incomplete nmea-messages
   char msg_buf[NMEA_MAXLEN];  ///< buffer for storing one nmea-line
   int msg_len;
+  uint8_t status;             ///< line parser status
+
+  struct GpsState state;
 };
 
 extern struct GpsNmea gps_nmea;
+
+extern void gps_nmea_init(void);
+extern void gps_nmea_event(void);
+
+#define gps_nmea_periodic_check() gps_periodic_check(&gps_nmea.state)
 
 
 /*
  * This part is used by the autopilot to read data from a uart
  */
-#define __GpsLink(dev, _x) dev##_x
-#define _GpsLink(dev, _x)  __GpsLink(dev, _x)
-#define GpsLink(_x) _GpsLink(GPS_LINK, _x)
 
-#define GpsBuffer() GpsLink(ChAvailable())
+/** The function to be called when a characted from the device is available */
+#include "pprzlink/pprzlink_device.h"
 
-#define GpsEvent(_sol_available_callback) {        \
-    if (GpsBuffer()) {                             \
-      ReadGpsBuffer();                             \
-    }                                              \
-    if (gps_nmea.msg_available) {                  \
-      nmea_parse_msg();				   \
-      if (gps_nmea.pos_available) {		   \
-        if (gps.fix == GPS_FIX_3D) {               \
-          gps.last_fix_ticks = sys_time.nb_sec_rem;     \
-          gps.last_fix_time = sys_time.nb_sec;        \
-        }                                          \
-        _sol_available_callback();                 \
-      }                                            \
-      gps_nmea.msg_available = FALSE;               \
-    }                                              \
-  }
-
-#define ReadGpsBuffer() {					\
-    while (GpsLink(ChAvailable())&&!gps_nmea.msg_available)	\
-      nmea_parse_char(GpsLink(Getch()));			\
-  }
-
-
-
-/** The function to be called when a characted friom the device is available */
+extern void nmea_configure(void);
 extern void nmea_parse_char(uint8_t c);
+extern bool nmea_parse_msg(void);
+extern uint8_t nmea_calc_crc(const char *buff, int buff_sz);
+extern void nmea_parse_prop_init(void);
+extern bool nmea_parse_prop_msg(void);
+extern void nmea_gps_msg(void);
 
-extern void nmea_parse_msg(void);
-
-
-#define gps_nmea_Reset(_val) { }
+/** Read until a certain character, placed here for proprietary includes */
+static inline void nmea_read_until(int *i)
+{
+  while (gps_nmea.msg_buf[(*i)++] != ',') {
+    if (*i >= gps_nmea.msg_len) {
+      return;
+    }
+  }
+}
 
 #endif /* GPS_NMEA_H */

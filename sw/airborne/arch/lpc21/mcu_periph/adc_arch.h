@@ -32,6 +32,14 @@
 
 #include BOARD_CONFIG
 
+/* Set the correct ADC resolution */
+#ifndef ADC_RESOLUTION
+#define ADC_RESOLUTION 1024
+#endif
+
+/** 8 ADCs for bank 0, others for bank 2 */
+#define NB_ADC 8
+
 #define AdcBank0(x) (x)
 #define AdcBank1(x) (x+NB_ADC)
 

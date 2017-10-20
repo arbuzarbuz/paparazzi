@@ -31,6 +31,7 @@ let (//) = Filename.concat
 type world = float * float
 
 let zoom_factor = 1.5 (* Mouse wheel zoom action *)
+let max_zoom = 40.
 let pan_step = 50 (* Pan keys speed *)
 let pan_arrow_size = 40.
 
@@ -72,6 +73,10 @@ let my_menu_item = fun label ~callback ~packing () ->
   let mi = GMenu.menu_item ~label ~packing () in
   ignore (mi#connect#activate ~callback)
 
+let my_menu_item_insert = fun label ~menu ~pos ~callback  ->
+  let mi = GMenu.menu_item ~label () in
+  menu#insert mi ~pos ;
+  ignore (mi#connect#activate ~callback)
 
 let set_opacity = fun pixbuf opacity ->
   let pixbuf = GdkPixbuf.add_alpha pixbuf in
@@ -123,6 +128,14 @@ let convex = fun l ->
             else l in
       (x3,y3)::List.rev (loop (List.rev ps))
 
+(** Setting Opacity for bitmap *)
+let stipple_opacity = fun opacity ->
+  match opacity with
+    | 0 -> (1,"\002\001")
+    | 1 -> (3,"\002\001")
+    | 2 -> (2,"\002\001")
+    | 3 -> (1,"\003\001")
+    | _ -> (1,"\002\001")
 
 class type geographic = object
   method pos : Latlong.geographic
@@ -177,7 +190,7 @@ class basic_widget = fun ?(height=800) ?width ?(projection = Mercator) ?georef (
   let wind_sock = new Wind_sock.item 4. still in
   let _ = wind_sock#item#affine_relative (affine_pos_and_angle 60. 60. 0.) in
   (* Time *)
-  let utc_time = GnoCanvas.text ~x:0. ~y:0. ~props:[`TEXT "00:00:00"; `FILL_COLOR "green"; `ANCHOR `NW] still in
+  let utc_time = GnoCanvas.text ~x:0. ~y:0. ~props:[`TEXT "00:00:00"; `FILL_COLOR "#00ff00"; `ANCHOR `NW] still in
 
 object (self)
 
@@ -202,7 +215,7 @@ object (self)
     wind_sock#label#set [`TEXT string]
 
   val adj = GData.adjustment
-    ~value:1. ~lower:0.005 ~upper:10.
+    ~value:1. ~lower:0.005 ~upper:max_zoom
     ~step_incr:0.25 ~page_incr:1.0 ~page_size:0. ()
 
   method info = info
@@ -216,6 +229,7 @@ object (self)
   val mutable region = None (* Rectangle selected region *)
   val mutable last_mouse_x = 0
   val mutable last_mouse_y = 0
+  val mutable zoom_level = 1.;
 
   val mutable fitted_objects = ([] : geographic list)
 
@@ -236,7 +250,7 @@ object (self)
         fitted_objects
         (max_float, -.max_float, max_float, -. max_float) in
 
-    (* Over 0° ? *)
+    (* Over 0Â° ? *)
     let min_long, max_long =
       if max_long -. min_long > pi
       then (max_long -. 2. *. pi, min_long)
@@ -258,6 +272,7 @@ object (self)
   initializer (
 
     spin_button#set_adjustment adj;
+    spin_button#set_value zoom_level; (* this should be done by set_adjustment but seems to fail on ubuntu 13.10 (at least) *)
 
     utc_time#hide ();
 
@@ -272,7 +287,7 @@ object (self)
     ignore (canvas#event#connect#after#key_press self#key_press) ;
     ignore (canvas#event#connect#enter_notify (fun _ -> self#canvas#misc#grab_focus () ; false));
     ignore (canvas#event#connect#any self#any_event);
-    ignore (adj#connect#value_changed (fun () -> canvas#set_pixels_per_unit adj#value));
+    ignore (adj#connect#value_changed (fun () -> if abs_float (adj#value -. zoom_level) >= 0.01 then self#zoom_in_center adj#value));
 
     canvas#set_center_scroll_region false ;
     canvas#set_scroll_region (-25000000.) (-25000000.) 25000000. 25000000.;
@@ -284,7 +299,7 @@ object (self)
   (** methods *)
 
   (** accessors to instance variables *)
-  method current_zoom = adj#value
+  method current_zoom = zoom_level
   method canvas = canvas
   method frame = frame
   method factory = factory
@@ -354,9 +369,21 @@ object (self)
         end
       | None -> failwith "#of_world : no georef"
 
-  method move_item = fun (item:GnomeCanvas.re_p GnoCanvas.item) wgs84 ->
+
+  method convert_positions_to_points = fun geo_arr ->
+    let getx = fun (x1, y1) -> x1 in
+    let gety = fun (x1, y1) -> y1 in
+    let arrlen = (Array.length geo_arr) in
+    let points = Array.make (arrlen*2) (getx (self#world_of geo_arr.(0)))  in
+    for i = 0 to arrlen - 1 do
+      points.(i*2) <- getx (self#world_of geo_arr.(i));
+      points.((i*2)+1) <- gety (self#world_of geo_arr.(i));
+    done;
+    points
+
+  method move_item = fun ?(z = 1.) (item:GnomeCanvas.re_p GnoCanvas.item) wgs84 ->
     let (xw,yw) = self#world_of wgs84 in
-    item#affine_absolute (affine_pos_and_angle xw yw 0.);
+    item#affine_absolute (affine_pos_and_angle ~z xw yw 0.);
 
   method moveto = fun wgs84 ->
     let (xw, yw) = self#world_of wgs84 in
@@ -405,11 +432,13 @@ object (self)
     pix
 
   method fix_bg_coords (xw, yw) = (** FIXME: how to do it properly ? *)
-    let z = self#current_zoom in
-    ((xw +. 25000000.) *. z, (yw +. 25000000.) *. z)
+    ((xw +. 25000000.) *. zoom_level, (yw +. 25000000.) *. zoom_level)
 
   method zoom = fun value ->
-    adj#set_value value
+    let value = min max_zoom value in
+    zoom_level <- value;  (* must set this before changing adj so that another zoom is not triggered *)
+    adj#set_value value;
+    canvas#set_pixels_per_unit value
 
   (**  events *******************************************)
   method background_event = fun ev ->
@@ -450,8 +479,8 @@ object (self)
             | Panning (x0, y0) ->
               let xc = GdkEvent.Motion.x ev
               and yc = GdkEvent.Motion.y ev in
-              let dx = self#current_zoom *. (xc -. x0)
-              and dy = self#current_zoom *. (yc -. y0) in
+              let dx = zoom_level *. (xc -. x0)
+              and dy = zoom_level *. (yc -. y0) in
               let (x, y) = canvas#get_scroll_offsets in
               canvas#scroll_to (x-truncate dx) (y-truncate dy)
             | _ -> ()
@@ -513,19 +542,28 @@ object (self)
   method connect_view = fun cb ->
     Hashtbl.add view_cbs cb ()
 
+  (* zoom keeping the center *)
+  method zoom_in_center = fun z ->
+    let c = self#get_center () in
+    self#zoom z;
+    self#center c
+
+  (* zoom keeping the area under the mouse pointer *)
   method zoom_in_place = fun z ->
     let (x, y) = canvas#get_scroll_offsets in
     canvas#scroll_to (x+last_mouse_x) (y+last_mouse_y);
 
-    adj#set_value z;
+    self#zoom z;
 
     let (x, y) = canvas#get_scroll_offsets in
     canvas#scroll_to (x-last_mouse_x) (y-last_mouse_y)
 
+
+
   method zoom_up () =
-    self#zoom_in_place (adj#value*.zoom_factor);
+    self#zoom_in_place (zoom_level*.zoom_factor);
   method zoom_down () =
-    self#zoom_in_place (adj#value/.zoom_factor);
+    self#zoom_in_place (zoom_level/.zoom_factor);
 
   method any_event =
     let rec last_view = ref (0,0,0,0) in
@@ -574,15 +612,23 @@ object (self)
     l
 
 
-  method circle = fun ?(group = canvas#root) ?(width=1) ?fill_color ?(color="black") geo radius ->
+  method circle = fun ?(group = canvas#root) ?(width=1) ?fill_color ?(opacity=0) ?(color="black") geo radius ->
     let (x, y) = self#world_of geo in
-
+    let (stpwidth, stpstr) = stipple_opacity opacity in
     (** Compute the actual radius in a UTM projection *)
     let utm = LL.utm_of LL.WGS84 geo in
     let geo_east = LL.of_utm LL.WGS84 (LL.utm_add utm (radius, 0.)) in
     let (xe, _) = self#world_of geo_east in
     let rad = xe -. x in
-    let l = GnoCanvas.ellipse ?fill_color ~props:[`WIDTH_PIXELS width; `OUTLINE_COLOR color] ~x1:(x-.rad) ~y1:(y -.rad) ~x2:(x +.rad) ~y2:(y+.rad) group in
+    let l = GnoCanvas.ellipse ?fill_color ~props:[`WIDTH_PIXELS width; `OUTLINE_COLOR color; `FILL_STIPPLE (Gdk.Bitmap.create_from_data ~width:stpwidth ~height:stpwidth stpstr)] ~x1:(x-.rad) ~y1:(y -.rad) ~x2:(x +.rad) ~y2:(y+.rad) group in
+    l#show ();
+    l
+
+  method polygon = fun ?(group = canvas#root) ?(width=1) ?fill_color ?(opacity=0) ?(color="black") geo_arr ->
+    (*setting opacity from 0-4 *)
+    let (stpwidth, stpstr) = stipple_opacity opacity in
+    let points = self#convert_positions_to_points geo_arr in
+    let l = GnoCanvas.polygon ?fill_color ~props:[`WIDTH_PIXELS width; `OUTLINE_COLOR color; `FILL_STIPPLE (Gdk.Bitmap.create_from_data ~width:stpwidth ~height:stpwidth stpstr)] ~points group in
     l#show ();
     l
 
@@ -610,7 +656,7 @@ object (self)
   let replace_still = fun _ ->
     let (x, y) = canvas#get_scroll_offsets in
     let (xc, yc) = canvas#window_to_world (float x) (float y) in
-    let z = 1./.self#current_zoom in
+    let z = 1./.zoom_level in
     still#affine_absolute [|z;0.;0.;z;xc;yc|]
   in
   self#connect_view replace_still;
@@ -644,7 +690,7 @@ object (self)
 
 
 class widget =  fun ?(height=800) ?(srtm=false) ?width ?projection ?georef () ->
-  let srtm = GMenu.check_menu_item ~label:"SRTM" ~active:srtm () in
+  let srtm = GMenu.check_menu_item ~label:"display SRTM alt" ~active:srtm () in
   let lbl_xy = GMisc.label ()
   and lbl_geo = GMisc.label ()
   and lbl_alt =  GMisc.label ()
@@ -675,6 +721,7 @@ class widget =  fun ?(height=800) ?(srtm=false) ?width ?projection ?georef () ->
       let bg_menu = my_check_menu_item "Background" ~active:true ~callback:self#switch_background ~packing:self#file_menu#append () in
 
       let tooltips = GData.tooltips () in
+      tooltips#set_tip srtm#coerce ~text:"Display SRTM alt at pointer position (will request for download if not available)";
 
       let b = GButton.button ~packing:toolbar#add () in
       ignore (b#connect#clicked (fun _ -> bg_menu#activate ()));
@@ -714,8 +761,8 @@ class widget =  fun ?(height=800) ?(srtm=false) ?width ?projection ?georef () ->
                LL.utm_zone = u0.LL.utm_zone;
                LL.utm_y = align u0.LL.utm_y 1000 } in
         for i = -size_utm_grid to size_utm_grid do
-          let h = Array.create (2*(2*size_utm_grid+1)) 0.
-          and v = Array.create (2*(2*size_utm_grid+1)) 0. in
+          let h = Array.make (2*(2*size_utm_grid+1)) 0.
+          and v = Array.make (2*(2*size_utm_grid+1)) 0. in
           for j = -size_utm_grid to size_utm_grid do
             let k = 2*(j+size_utm_grid) in
             let p = fun i j ->
@@ -764,9 +811,68 @@ class widget =  fun ?(height=800) ?(srtm=false) ?width ?projection ?georef () ->
     method georefs = georefs
 
     method add_info_georef = fun name geo ->
-      georefs <- (name, geo) :: georefs;
+      (* add to the end so georefs has same order as waypoint list *)
+      georefs <- List.append georefs [(name, geo)];
       let callback = fun () -> selected_georef <- Bearing geo in
       my_menu_item name ~packing:georef_menu#append ~callback ();
+
+    (* change wp name *)
+    method edit_georef_name = fun oldname newname ->
+      (* get offset between WP list and menu list *)
+      let extraitems = (List.length georef_menu#children) - (List.length georefs) in
+      if newname <> oldname then
+        georefs <- List.fold_left (fun l (label, geo) ->
+          if label = oldname then
+            begin
+              let callback = fun () -> selected_georef <- Bearing geo in
+              let pos = List.length l + extraitems in
+              (* remove item and readd with new name *)
+              georef_menu#remove (List.nth georef_menu#children pos);
+              (*my_menu_item_insert newname ~menu:georef_menu ~pos:menupos ~callback;*)
+              my_menu_item newname ~packing:(georef_menu#insert ~pos) ~callback ();
+              if selected_georef = (Bearing geo) then optmenu#set_history pos;
+              List.append l [(newname, geo)]
+            end
+          else
+            List.append l [(label, geo)]
+        ) [] georefs
+
+    (* Delete item from georefs and from menu *)
+    method delete_georef = fun name ->
+      (* get offset between WP list and menu list *)
+      let extraitems = (List.length georef_menu#children) - (List.length georefs) in
+      georefs <- List.fold_left (fun l (label, geo) ->
+        if label = name then
+          begin
+            let menupos = List.length l + extraitems in
+            (* remove item *)
+            georef_menu#remove (List.nth georef_menu#children menupos);
+            if selected_georef = (Bearing geo) then
+              begin
+                (List.nth georef_menu#children 0)#activate ();
+                optmenu#set_history 0;
+              end;
+            l
+          end
+        else
+          List.append l [(label, geo)]
+      ) [] georefs
+
+    (* delete all wp, including fitted objects *)
+    method clear_georefs = fun () ->
+      (* get offset between WP list and menu list *)
+      let extraitems = (List.length georef_menu#children) - (List.length georefs) in
+      (* delete items from georefs and from menu *)
+      ignore (List.fold_left (fun i v ->
+        if i >= extraitems then georef_menu#remove v;
+        i + 1
+      ) 0 georef_menu#children);
+      (List.nth georef_menu#children 0)#activate ();
+      optmenu#set_history 0;
+      georefs <- [];
+      (* finally delete all fitted objects *)
+      fitted_objects <- [];
+
 
     (** display methods *)
     method display_xy = fun s ->  lbl_xy#set_text s
@@ -776,7 +882,9 @@ class widget =  fun ?(height=800) ?(srtm=false) ?width ?projection ?georef () ->
 
     method display_alt = fun wgs84 ->
       if srtm#active then
-    lbl_alt#set_text (sprintf " SRTM:%dm"(self#altitude wgs84))
+        lbl_alt#set_text (sprintf "  SRTM:%dm"(self#altitude wgs84))
+      else if not (Srtm.available wgs84) then
+        lbl_alt#set_text (sprintf "  SRTM: N/A")
 
     method display_group = fun s ->  lbl_group#set_text s
 
